@@ -1,0 +1,5 @@
+mamba install jaxlib=0.3.22=*cuda* jax==0.3.23 -c conda-forge
+mamba install cuda-nvcc -c "nvidia/label/cuda-11.8.0"
+mamba install seaborn
+pip install tqdm huggingface-hub pyyaml regex tokenizers safetensors msgpack
+pip install transformers[flax] flax==0.5 optax==0.1.3 chex==0.1.5 --no-deps
