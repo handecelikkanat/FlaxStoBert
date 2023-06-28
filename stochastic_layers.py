@@ -41,7 +41,7 @@ def draw_samples(indices, mean, std, rng, dtype):
     noise = jax.random.normal(rng, jnp.shape(mean), dtype)
     return mean + std*noise
 
-class Dense(nn.Dense):
+class Dense(nn.Module):
     """A linear transformation applied over the last dimension of the input.
 
     Attributes:
@@ -113,14 +113,15 @@ class Dense(nn.Dense):
         rng_out = self.make_rng(self.rng_collection)
         in_samples = draw_samples(indices, posterior_mean_in, posterior_std_in, rng_in, self.dtype) # [batch_size, rank, input_size]
         out_samples = draw_samples(indices, posterior_mean_out, posterior_std_out, rng_out, self.dtype) # [batch_size, rank, features]
-        inputs = lax.mul(lax.expand_dims(inputs, (inputs.ndim - 1,)), in_samples)
+        
+        inputs = lax.mul(lax.expand_dims(inputs, (inputs.ndim - 1,)), in_samples) # [batch_size, rank, input_size]
 
         y = lax.dot_general(inputs, kernel,
                             (((inputs.ndim - 1,), (0,)), ((), ())),
                             precision=self.precision)
         
-        y = lax.mul(y, out_samples)
-        y = jnp.sum(y, axis=y.ndim - 2)
+        y = lax.mul(y, out_samples) # [batch_size, rank, features]
+        y = jnp.sum(y, axis=y.ndim - 2) # sum over the rank dimension. The output tensor dimension: [batch_size, features]
         if bias is not None:
             y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
         return y
