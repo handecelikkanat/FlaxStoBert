@@ -1519,7 +1519,7 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
     """
 
     config_class = StoBertConfig
-    base_model_prefix = "bert" # TODO/ is this rigt? should it be stobert?
+    base_model_prefix = "bert" # TODO/ is this righ§t? should it be stobert?
     module_class: nn.Module = None
 
     def __init__(
@@ -1856,9 +1856,12 @@ class FlaxStoBertModule(nn.Module):
 class FlaxBertModel(FlaxBertPreTrainedModel):
     module_class = FlaxBertModule
 
+class FlaxStoBertModel(FlaxBertPreTrainedModel):
+    module_class = FlaxStoBertModule
 
 append_call_sample_docstring(FlaxBertModel, _CHECKPOINT_FOR_DOC, FlaxBaseModelOutputWithPooling, _CONFIG_FOR_DOC)
 
+append_call_sample_docstring(FlaxStoBertModel, _CHECKPOINT_FOR_DOC, FlaxStoBaseModelOutputWithPooling, _CONFIG_FOR_DOC)
 
 class FlaxBertForPreTrainingModule(nn.Module):
     config: BertConfig
@@ -1921,6 +1924,67 @@ class FlaxBertForPreTrainingModule(nn.Module):
         )
 
 
+class FlaxStoBertForPreTrainingModule(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32
+    gradient_checkpointing: bool = False
+
+    def setup(self):
+        self.bert = FlaxStoBertModule(
+            config=self.config,
+            dtype=self.dtype,
+            gradient_checkpointing=self.gradient_checkpointing,
+        )
+        self.cls = FlaxStoBertPreTrainingHeads(config=self.config, dtype=self.dtype)
+
+    def __call__(
+        self,
+        input_ids,
+        attention_mask,
+        token_type_ids,
+        position_ids,
+        head_mask,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+    ):
+        # Model
+        outputs = self.bert(
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            position_ids,
+            head_mask,
+            deterministic=deterministic,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        if self.config.tie_word_embeddings:
+            shared_embedding = self.bert.variables["params"]["embeddings"]["word_embeddings"]["embedding"]
+        else:
+            shared_embedding = None
+
+        hidden_states = outputs[0]
+        pooled_output = outputs[1]
+
+        prediction_scores, seq_relationship_score = self.cls(
+            hidden_states, pooled_output, shared_embedding=shared_embedding
+        )
+
+        if not return_dict:
+            return (prediction_scores, seq_relationship_score) + outputs[2:]
+
+        return FlaxStoBertForPreTrainingOutput(
+            prediction_logits=prediction_scores,
+            seq_relationship_logits=seq_relationship_score,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
 @add_start_docstrings(
     """
     Bert Model with two heads on top as done during the pretraining: a `masked language modeling` head and a `next
@@ -1931,6 +1995,16 @@ class FlaxBertForPreTrainingModule(nn.Module):
 class FlaxBertForPreTraining(FlaxBertPreTrainedModel):
     module_class = FlaxBertForPreTrainingModule
 
+
+@add_start_docstrings(
+    """
+    Stochastic implementation (node-bnn) of a Bert Model with two heads on top as done during the pretraining: a `masked language modeling` head and a `next
+    sentence prediction (classification)` head.
+    """,
+    BERT_START_DOCSTRING,
+)
+class FlaxStoBertForPreTraining(FlaxStoBertPreTrainedModel):
+    module_class = FlaxStoBertForPreTrainingModule
 
 FLAX_BERT_FOR_PRETRAINING_DOCSTRING = """
     Returns:
@@ -2178,39 +2252,27 @@ class FlaxBertForSequenceClassificationModule(nn.Module):
             attentions=outputs.attentions,
         )
 
-
-@add_start_docstrings(
-    """
-    Bert Model transformer with a sequence classification/regression head on top (a linear layer on top of the pooled
-    output) e.g. for GLUE tasks.
-    """,
-    BERT_START_DOCSTRING,
-)
-class FlaxBertForSequenceClassification(FlaxBertPreTrainedModel):
-    module_class = FlaxBertForSequenceClassificationModule
-
-
-append_call_sample_docstring(
-    FlaxBertForSequenceClassification,
-    _CHECKPOINT_FOR_DOC,
-    FlaxSequenceClassifierOutput,
-    _CONFIG_FOR_DOC,
-)
-
-
-class FlaxBertForMultipleChoiceModule(nn.Module):
-    config: BertConfig
+class FlaxStoBertForSequenceClassificationModule(nn.Module):
+    config: StoBertConfig
     dtype: jnp.dtype = jnp.float32
     gradient_checkpointing: bool = False
 
     def setup(self):
-        self.bert = FlaxBertModule(
+        self.bert = FlaxStoBertModule(
             config=self.config,
             dtype=self.dtype,
             gradient_checkpointing=self.gradient_checkpointing,
         )
-        self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
-        self.classifier = nn.Dense(1, dtype=self.dtype)
+        classifier_dropout = (
+            self.config.classifier_dropout
+            if self.config.classifier_dropout is not None
+            else self.config.hidden_dropout_prob
+        )
+        self.dropout = nn.Dropout(rate=classifier_dropout)
+        self.classifier = nn.StoDense(
+            self.config.num_labels,
+            dtype=self.dtype,
+        )
 
     def __call__(
         self,
@@ -2224,12 +2286,6 @@ class FlaxBertForMultipleChoiceModule(nn.Module):
         output_hidden_states: bool = False,
         return_dict: bool = True,
     ):
-        num_choices = input_ids.shape[1]
-        input_ids = input_ids.reshape(-1, input_ids.shape[-1]) if input_ids is not None else None
-        attention_mask = attention_mask.reshape(-1, attention_mask.shape[-1]) if attention_mask is not None else None
-        token_type_ids = token_type_ids.reshape(-1, token_type_ids.shape[-1]) if token_type_ids is not None else None
-        position_ids = position_ids.reshape(-1, position_ids.shape[-1]) if position_ids is not None else None
-
         # Model
         outputs = self.bert(
             input_ids,
@@ -2247,293 +2303,39 @@ class FlaxBertForMultipleChoiceModule(nn.Module):
         pooled_output = self.dropout(pooled_output, deterministic=deterministic)
         logits = self.classifier(pooled_output)
 
-        reshaped_logits = logits.reshape(-1, num_choices)
-
         if not return_dict:
-            return (reshaped_logits,) + outputs[2:]
+            return (logits,) + outputs[2:]
 
-        return FlaxMultipleChoiceModelOutput(
-            logits=reshaped_logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-
-@add_start_docstrings(
-    """
-    Bert Model with a multiple choice classification head on top (a linear layer on top of the pooled output and a
-    softmax) e.g. for RocStories/SWAG tasks.
-    """,
-    BERT_START_DOCSTRING,
-)
-class FlaxBertForMultipleChoice(FlaxBertPreTrainedModel):
-    module_class = FlaxBertForMultipleChoiceModule
-
-
-overwrite_call_docstring(
-    FlaxBertForMultipleChoice, BERT_INPUTS_DOCSTRING.format("batch_size, num_choices, sequence_length")
-)
-append_call_sample_docstring(
-    FlaxBertForMultipleChoice, _CHECKPOINT_FOR_DOC, FlaxMultipleChoiceModelOutput, _CONFIG_FOR_DOC
-)
-
-
-class FlaxBertForTokenClassificationModule(nn.Module):
-    config: BertConfig
-    dtype: jnp.dtype = jnp.float32
-    gradient_checkpointing: bool = False
-
-    def setup(self):
-        self.bert = FlaxBertModule(
-            config=self.config,
-            dtype=self.dtype,
-            add_pooling_layer=False,
-            gradient_checkpointing=self.gradient_checkpointing,
-        )
-        classifier_dropout = (
-            self.config.classifier_dropout
-            if self.config.classifier_dropout is not None
-            else self.config.hidden_dropout_prob
-        )
-        self.dropout = nn.Dropout(rate=classifier_dropout)
-        self.classifier = nn.Dense(self.config.num_labels, dtype=self.dtype)
-
-    def __call__(
-        self,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        position_ids,
-        head_mask,
-        deterministic: bool = True,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-        return_dict: bool = True,
-    ):
-        # Model
-        outputs = self.bert(
-            input_ids,
-            attention_mask,
-            token_type_ids,
-            position_ids,
-            head_mask,
-            deterministic=deterministic,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        hidden_states = outputs[0]
-        hidden_states = self.dropout(hidden_states, deterministic=deterministic)
-        logits = self.classifier(hidden_states)
-
-        if not return_dict:
-            return (logits,) + outputs[1:]
-
-        return FlaxTokenClassifierOutput(
+        return FlaxSequenceClassifierOutput(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
 
 
-@add_start_docstrings(
-    """
-    Bert Model with a token classification head on top (a linear layer on top of the hidden-states output) e.g. for
-    Named-Entity-Recognition (NER) tasks.
-    """,
-    BERT_START_DOCSTRING,
-)
-class FlaxBertForTokenClassification(FlaxBertPreTrainedModel):
-    module_class = FlaxBertForTokenClassificationModule
-
-
-append_call_sample_docstring(
-    FlaxBertForTokenClassification, _CHECKPOINT_FOR_DOC, FlaxTokenClassifierOutput, _CONFIG_FOR_DOC
-)
-
-
-class FlaxBertForQuestionAnsweringModule(nn.Module):
-    config: BertConfig
-    dtype: jnp.dtype = jnp.float32
-    gradient_checkpointing: bool = False
-
-    def setup(self):
-        self.bert = FlaxBertModule(
-            config=self.config,
-            dtype=self.dtype,
-            add_pooling_layer=False,
-            gradient_checkpointing=self.gradient_checkpointing,
-        )
-        self.qa_outputs = nn.Dense(self.config.num_labels, dtype=self.dtype)
-
-    def __call__(
-        self,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        position_ids,
-        head_mask,
-        deterministic: bool = True,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-        return_dict: bool = True,
-    ):
-        # Model
-        outputs = self.bert(
-            input_ids,
-            attention_mask,
-            token_type_ids,
-            position_ids,
-            head_mask,
-            deterministic=deterministic,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        hidden_states = outputs[0]
-
-        logits = self.qa_outputs(hidden_states)
-        start_logits, end_logits = logits.split(self.config.num_labels, axis=-1)
-        start_logits = start_logits.squeeze(-1)
-        end_logits = end_logits.squeeze(-1)
-
-        if not return_dict:
-            return (start_logits, end_logits) + outputs[1:]
-
-        return FlaxQuestionAnsweringModelOutput(
-            start_logits=start_logits,
-            end_logits=end_logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
 
 @add_start_docstrings(
     """
-    Bert Model with a span classification head on top for extractive question-answering tasks like SQuAD (a linear
-    layers on top of the hidden-states output to compute `span start logits` and `span end logits`).
+    Bert Model transformer with a sequence classification/regression head on top (a linear layer on top of the pooled
+    output) e.g. for GLUE tasks.
     """,
     BERT_START_DOCSTRING,
 )
-class FlaxBertForQuestionAnswering(FlaxBertPreTrainedModel):
-    module_class = FlaxBertForQuestionAnsweringModule
+class FlaxBertForSequenceClassification(FlaxBertPreTrainedModel):
+    module_class = FlaxBertForSequenceClassificationModule
 
+class FlaxStoBertForSequenceClassification(FlaxStoBertPreTrainedModel):
+    module_class = FlaxStoBertForSequenceClassificationModule
 
 append_call_sample_docstring(
-    FlaxBertForQuestionAnswering,
+    FlaxBertForSequenceClassification,
     _CHECKPOINT_FOR_DOC,
-    FlaxQuestionAnsweringModelOutput,
+    FlaxSequenceClassifierOutput,
     _CONFIG_FOR_DOC,
 )
 
-
-class FlaxBertForCausalLMModule(nn.Module):
-    config: BertConfig
-    dtype: jnp.dtype = jnp.float32
-    gradient_checkpointing: bool = False
-
-    def setup(self):
-        self.bert = FlaxBertModule(
-            config=self.config,
-            add_pooling_layer=False,
-            dtype=self.dtype,
-            gradient_checkpointing=self.gradient_checkpointing,
-        )
-        self.cls = FlaxBertOnlyMLMHead(config=self.config, dtype=self.dtype)
-
-    def __call__(
-        self,
-        input_ids,
-        attention_mask,
-        position_ids,
-        token_type_ids: Optional[jnp.ndarray] = None,
-        head_mask: Optional[jnp.ndarray] = None,
-        encoder_hidden_states: Optional[jnp.ndarray] = None,
-        encoder_attention_mask: Optional[jnp.ndarray] = None,
-        init_cache: bool = False,
-        deterministic: bool = True,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-        return_dict: bool = True,
-    ):
-        # Model
-        outputs = self.bert(
-            input_ids,
-            attention_mask,
-            token_type_ids,
-            position_ids,
-            head_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            init_cache=init_cache,
-            deterministic=deterministic,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        hidden_states = outputs[0]
-        if self.config.tie_word_embeddings:
-            shared_embedding = self.bert.variables["params"]["embeddings"]["word_embeddings"]["embedding"]
-        else:
-            shared_embedding = None
-
-        # Compute the prediction scores
-        logits = self.cls(hidden_states, shared_embedding=shared_embedding)
-
-        if not return_dict:
-            return (logits,) + outputs[1:]
-
-        return FlaxCausalLMOutputWithCrossAttentions(
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-            cross_attentions=outputs.cross_attentions,
-        )
-
-
-@add_start_docstrings(
-    """
-    Bert Model with a language modeling head on top (a linear layer on top of the hidden-states output) e.g for
-    autoregressive tasks.
-    """,
-    BERT_START_DOCSTRING,
-)
-class FlaxBertForCausalLM(FlaxBertPreTrainedModel):
-    module_class = FlaxBertForCausalLMModule
-
-    def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jnp.DeviceArray] = None):
-        # initializing the cache
-        batch_size, seq_length = input_ids.shape
-
-        past_key_values = self.init_cache(batch_size, max_length)
-        # Note that usually one would have to put 0's in the attention_mask for x > input_ids.shape[-1] and x < cache_length.
-        # But since the decoder uses a causal mask, those positions are masked anyway.
-        # Thus, we can create a single static attention_mask here, which is more efficient for compilation
-        extended_attention_mask = jnp.ones((batch_size, max_length), dtype="i4")
-        if attention_mask is not None:
-            position_ids = attention_mask.cumsum(axis=-1) - 1
-            extended_attention_mask = lax.dynamic_update_slice(extended_attention_mask, attention_mask, (0, 0))
-        else:
-            position_ids = jnp.broadcast_to(jnp.arange(seq_length, dtype="i4")[None, :], (batch_size, seq_length))
-
-        return {
-            "past_key_values": past_key_values,
-            "attention_mask": extended_attention_mask,
-            "position_ids": position_ids,
-        }
-
-    def update_inputs_for_generation(self, model_outputs, model_kwargs):
-        model_kwargs["past_key_values"] = model_outputs.past_key_values
-        model_kwargs["position_ids"] = model_kwargs["position_ids"][:, -1:] + 1
-        return model_kwargs
-
-
-append_call_sample_docstring(
-    FlaxBertForCausalLM,
-    _CHECKPOINT_FOR_DOC,
-    FlaxCausalLMOutputWithCrossAttentions,
-    _CONFIG_FOR_DOC,
-)
+# TODO: other implementations pending: 
+#       take from transformers lib.
+#       - FlaxBertForMultipleChoiceModule, FlaxBertForMultipleChoice,  FlaxBertForTokenClassificationModule, 
+#         FlaxBertForTokenClassification,  FlaxBertForQuestionAnsweringModule, FlaxBertForQuestionAnswering, 
+#         FlaxBertForCausalLMModule, FlaxBertForCausalLM
