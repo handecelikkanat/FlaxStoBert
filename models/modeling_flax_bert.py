@@ -218,6 +218,49 @@ class FlaxBertEmbeddings(nn.Module):
         return hidden_states
 
 
+class FlaxStoBertEmbeddings(nn.Module):
+    """Construct the embeddings from word, position and token_type embeddings."""
+
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32  # the dtype of the computation
+
+    def setup(self):
+        self.word_embeddings = nn.Embed(
+            self.config.vocab_size,
+            self.config.hidden_size,
+            embedding_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
+            dtype=self.dtype,
+        )
+        self.position_embeddings = nn.Embed(
+            self.config.max_position_embeddings,
+            self.config.hidden_size,
+            embedding_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
+            dtype=self.dtype,
+        )
+        self.token_type_embeddings = nn.Embed(
+            self.config.type_vocab_size,
+            self.config.hidden_size,
+            embedding_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
+            dtype=self.dtype,
+        )
+        self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
+        self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
+
+    def __call__(self, input_ids, token_type_ids, position_ids, attention_mask, deterministic: bool = True):
+        # Embed
+        inputs_embeds = self.word_embeddings(input_ids.astype("i4"))
+        position_embeds = self.position_embeddings(position_ids.astype("i4"))
+        token_type_embeddings = self.token_type_embeddings(token_type_ids.astype("i4"))
+
+        # Sum all embeddings
+        hidden_states = inputs_embeds + token_type_embeddings + position_embeds
+
+        # Layer Norm
+        hidden_states = self.LayerNorm(hidden_states)
+        hidden_states = self.dropout(hidden_states, deterministic=deterministic)
+        return hidden_states
+
+
 class FlaxBertSelfAttention(nn.Module):
     config: BertConfig
     causal: bool = False
@@ -390,7 +433,7 @@ class FlaxBertSelfAttention(nn.Module):
 
 
 class FlaxStoBertSelfAttention(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     causal: bool = False
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
@@ -581,7 +624,7 @@ class FlaxBertSelfOutput(nn.Module):
         return hidden_states
 
 class FlaxStoBertSelfOutput(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
@@ -591,7 +634,7 @@ class FlaxStoBertSelfOutput(nn.Module):
             dtype=self.dtype,
         )
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
-        #self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
+        self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
 
     def __call__(self, hidden_states, input_tensor, deterministic: bool = True):
         hidden_states = self.dense(hidden_states)
@@ -641,7 +684,7 @@ class FlaxBertAttention(nn.Module):
         return outputs
 
 class FlaxStoBertAttention(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     causal: bool = False
     dtype: jnp.dtype = jnp.float32
 
@@ -699,7 +742,7 @@ class FlaxBertIntermediate(nn.Module):
         return hidden_states
 
 class FlaxStoBertIntermediate(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
@@ -735,7 +778,7 @@ class FlaxBertOutput(nn.Module):
         return hidden_states
 
 class FlaxStoBertOutput(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
@@ -810,7 +853,7 @@ class FlaxBertLayer(nn.Module):
         return outputs
 
 class FlaxStoBertLayer(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
@@ -818,7 +861,7 @@ class FlaxStoBertLayer(nn.Module):
         self.intermediate = FlaxStoBertIntermediate(self.config, dtype=self.dtype)
         self.output = FlaxStoBertOutput(self.config, dtype=self.dtype)
         if self.config.add_cross_attention:
-            self.crossattention = FlaxBertAttention(self.config, causal=False, dtype=self.dtype)
+            self.crossattention = FlaxStoBertAttention(self.config, causal=False, dtype=self.dtype)
 
     def __call__(
         self,
@@ -946,6 +989,85 @@ class FlaxBertLayerCollection(nn.Module):
             cross_attentions=all_cross_attentions,
         )
 
+class FlaxStoBertLayerCollection(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32  # the dtype of the computation
+    gradient_checkpointing: bool = False
+
+    def setup(self):
+        if self.gradient_checkpointing:
+            FlaxBertCheckpointLayer = remat(FlaxBertLayer, static_argnums=(5, 6, 7))
+            self.layers = [
+                FlaxStoBertCheckpointLayer(self.config, name=str(i), dtype=self.dtype)
+                for i in range(self.config.num_hidden_layers)
+            ]
+        else:
+            self.layers = [
+                FlaxStoBertLayer(self.config, name=str(i), dtype=self.dtype) for i in range(self.config.num_hidden_layers)
+            ]
+
+    def __call__(
+        self,
+        hidden_states,
+        attention_mask,
+        head_mask,
+        encoder_hidden_states: Optional[jnp.ndarray] = None,
+        encoder_attention_mask: Optional[jnp.ndarray] = None,
+        init_cache: bool = False,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+    ):
+        all_attentions = () if output_attentions else None
+        all_hidden_states = () if output_hidden_states else None
+        all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
+
+        # Check if head_mask has a correct number of layers specified if desired
+        if head_mask is not None:
+            if head_mask.shape[0] != (len(self.layers)):
+                raise ValueError(
+                    f"The head_mask should be specified for {len(self.layers)} layers, but it is for                  "
+                    f"       {head_mask.shape[0]}."
+                )
+
+        for i, layer in enumerate(self.layers):
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask,
+                head_mask[i] if head_mask is not None else None,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                init_cache,
+                deterministic,
+                output_attentions,
+            )
+
+            hidden_states = layer_outputs[0]
+
+            if output_attentions:
+                all_attentions += (layer_outputs[1],)
+
+                if encoder_hidden_states is not None:
+                    all_cross_attentions += (layer_outputs[2],)
+
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        outputs = (hidden_states, all_hidden_states, all_attentions, all_cross_attentions)
+
+        if not return_dict:
+            return tuple(v for v in outputs if v is not None)
+
+        return FlaxBaseModelOutputWithPastAndCrossAttentions(
+            last_hidden_state=hidden_states,
+            hidden_states=all_hidden_states,
+            attentions=all_attentions,
+            cross_attentions=all_cross_attentions,
+        )
 
 class FlaxBertEncoder(nn.Module):
     config: BertConfig
@@ -954,6 +1076,44 @@ class FlaxBertEncoder(nn.Module):
 
     def setup(self):
         self.layer = FlaxBertLayerCollection(
+            self.config,
+            dtype=self.dtype,
+            gradient_checkpointing=self.gradient_checkpointing,
+        )
+
+    def __call__(
+        self,
+        hidden_states,
+        attention_mask,
+        head_mask,
+        encoder_hidden_states: Optional[jnp.ndarray] = None,
+        encoder_attention_mask: Optional[jnp.ndarray] = None,
+        init_cache: bool = False,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+    ):
+        return self.layer(
+            hidden_states,
+            attention_mask,
+            head_mask=head_mask,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            init_cache=init_cache,
+            deterministic=deterministic,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+class FlaxStoBertEncoder(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32  # the dtype of the computation
+    gradient_checkpointing: bool = False
+
+    def setup(self):
+        self.layer = FlaxStoBertLayerCollection(
             self.config,
             dtype=self.dtype,
             gradient_checkpointing=self.gradient_checkpointing,
@@ -1004,7 +1164,7 @@ class FlaxBertPooler(nn.Module):
 
 
 class FlaxStoBertPooler(nn.Module):
-    config: BertConfig
+    config: StoBertConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
@@ -1034,6 +1194,19 @@ class FlaxBertPredictionHeadTransform(nn.Module):
         hidden_states = self.activation(hidden_states)
         return self.LayerNorm(hidden_states)
 
+class FlaxStoBertPredictionHeadTransform(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32
+
+    def setup(self):
+        self.dense = nn.StoDense(self.config.hidden_size, dtype=self.dtype)
+        self.activation = ACT2FN[self.config.hidden_act]
+        self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
+
+    def __call__(self, hidden_states):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.activation(hidden_states)
+        return self.LayerNorm(hidden_states)
 
 class FlaxBertLMPredictionHead(nn.Module):
     config: BertConfig
@@ -1057,6 +1230,27 @@ class FlaxBertLMPredictionHead(nn.Module):
         hidden_states += bias
         return hidden_states
 
+class FlaxStoBertLMPredictionHead(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32
+    bias_init: Callable[..., np.ndarray] = jax.nn.initializers.zeros
+
+    def setup(self):
+        self.transform = FlaxStoBertPredictionHeadTransform(self.config, dtype=self.dtype)
+        self.decoder = nn.StoDense(self.config.vocab_size, dtype=self.dtype, use_bias=False)
+        self.bias = self.param("bias", self.bias_init, (self.config.vocab_size,))
+
+    def __call__(self, hidden_states, shared_embedding=None):
+        hidden_states = self.transform(hidden_states)
+
+        if shared_embedding is not None:
+            hidden_states = self.decoder.apply({"params": {"kernel": shared_embedding.T}}, hidden_states)
+        else:
+            hidden_states = self.decoder(hidden_states)
+
+        bias = jnp.asarray(self.bias, self.dtype)
+        hidden_states += bias
+        return hidden_states
 
 class FlaxBertOnlyMLMHead(nn.Module):
     config: BertConfig
@@ -1069,6 +1263,16 @@ class FlaxBertOnlyMLMHead(nn.Module):
         hidden_states = self.predictions(hidden_states, shared_embedding=shared_embedding)
         return hidden_states
 
+class FlaxStoBertOnlyMLMHead(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32
+
+    def setup(self):
+        self.predictions = FlaxStoBertLMPredictionHead(self.config, dtype=self.dtype)
+
+    def __call__(self, hidden_states, shared_embedding=None):
+        hidden_states = self.predictions(hidden_states, shared_embedding=shared_embedding)
+        return hidden_states
 
 class FlaxBertOnlyNSPHead(nn.Module):
     dtype: jnp.dtype = jnp.float32
@@ -1079,6 +1283,14 @@ class FlaxBertOnlyNSPHead(nn.Module):
     def __call__(self, pooled_output):
         return self.seq_relationship(pooled_output)
 
+class FlaxStoBertOnlyNSPHead(nn.Module):
+    dtype: jnp.dtype = jnp.float32
+
+    def setup(self):
+        self.seq_relationship = nn.StoDense(2, dtype=self.dtype)
+
+    def __call__(self, pooled_output):
+        return self.seq_relationship(pooled_output)
 
 class FlaxBertPreTrainingHeads(nn.Module):
     config: BertConfig
@@ -1093,6 +1305,18 @@ class FlaxBertPreTrainingHeads(nn.Module):
         seq_relationship_score = self.seq_relationship(pooled_output)
         return prediction_scores, seq_relationship_score
 
+class FlaxStoBertPreTrainingHeads(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32
+
+    def setup(self):
+        self.predictions = FlaxStoBertLMPredictionHead(self.config, dtype=self.dtype)
+        self.seq_relationship = nn.StoDense(2, dtype=self.dtype)
+
+    def __call__(self, hidden_states, pooled_output, shared_embedding=None):
+        prediction_scores = self.predictions(hidden_states, shared_embedding=shared_embedding)
+        seq_relationship_score = self.seq_relationship(pooled_output)
+        return prediction_scores, seq_relationship_score
 
 class FlaxBertPreTrainedModel(FlaxPreTrainedModel):
     """
@@ -1107,6 +1331,200 @@ class FlaxBertPreTrainedModel(FlaxPreTrainedModel):
     def __init__(
         self,
         config: BertConfig,
+        input_shape: Tuple = (1, 1),
+        seed: int = 0,
+        dtype: jnp.dtype = jnp.float32,
+        _do_init: bool = True,
+        gradient_checkpointing: bool = False,
+        **kwargs,
+    ):
+        module = self.module_class(
+            config=config,
+            dtype=dtype,
+            gradient_checkpointing=gradient_checkpointing,
+            **kwargs,
+        )
+        super().__init__(config, module, input_shape=input_shape, seed=seed, dtype=dtype, _do_init=_do_init)
+
+    def enable_gradient_checkpointing(self):
+        self._module = self.module_class(
+            config=self.config,
+            dtype=self.dtype,
+            gradient_checkpointing=True,
+        )
+
+    def init_weights(self, rng: jax.random.PRNGKey, input_shape: Tuple, params: FrozenDict = None) -> FrozenDict:
+        # init input tensors
+        input_ids = jnp.zeros(input_shape, dtype="i4")
+        token_type_ids = jnp.zeros_like(input_ids)
+        position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_shape)
+        attention_mask = jnp.ones_like(input_ids)
+        head_mask = jnp.ones((self.config.num_hidden_layers, self.config.num_attention_heads))
+
+        params_rng, dropout_rng = jax.random.split(rng)
+        rngs = {"params": params_rng, "dropout": dropout_rng}
+
+        if self.config.add_cross_attention:
+            encoder_hidden_states = jnp.zeros(input_shape + (self.config.hidden_size,))
+            encoder_attention_mask = attention_mask
+            module_init_outputs = self.module.init(
+                rngs,
+                input_ids,
+                attention_mask,
+                token_type_ids,
+                position_ids,
+                head_mask,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                return_dict=False,
+            )
+        else:
+            module_init_outputs = self.module.init(
+                rngs, input_ids, attention_mask, token_type_ids, position_ids, head_mask, return_dict=False
+            )
+
+        random_params = module_init_outputs["params"]
+
+        if params is not None:
+            random_params = flatten_dict(unfreeze(random_params))
+            params = flatten_dict(unfreeze(params))
+            for missing_key in self._missing_keys:
+                params[missing_key] = random_params[missing_key]
+            self._missing_keys = set()
+            return freeze(unflatten_dict(params))
+        else:
+            return random_params
+
+    # Copied from transformers.models.bart.modeling_flax_bart.FlaxBartDecoderPreTrainedModel.init_cache
+    def init_cache(self, batch_size, max_length):
+        r"""
+        Args:
+            batch_size (`int`):
+                batch_size used for fast auto-regressive decoding. Defines the batch size of the initialized cache.
+            max_length (`int`):
+                maximum possible length for auto-regressive decoding. Defines the sequence length of the initialized
+                cache.
+        """
+        # init input variables to retrieve cache
+        input_ids = jnp.ones((batch_size, max_length), dtype="i4")
+        attention_mask = jnp.ones_like(input_ids, dtype="i4")
+        position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_ids.shape)
+
+        init_variables = self.module.init(
+            jax.random.PRNGKey(0), input_ids, attention_mask, position_ids, return_dict=False, init_cache=True
+        )
+        return unfreeze(init_variables["cache"])
+
+    @add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
+    def __call__(
+        self,
+        input_ids,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        params: dict = None,
+        dropout_rng: jax.random.PRNGKey = None,
+        train: bool = False,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        past_key_values: dict = None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
+
+        # init input tensors if not passed
+        if token_type_ids is None:
+            token_type_ids = jnp.zeros_like(input_ids)
+
+        if position_ids is None:
+            position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_ids.shape)
+
+        if attention_mask is None:
+            attention_mask = jnp.ones_like(input_ids)
+
+        if head_mask is None:
+            head_mask = jnp.ones((self.config.num_hidden_layers, self.config.num_attention_heads))
+
+        # Handle any PRNG if needed
+        rngs = {}
+        if dropout_rng is not None:
+            rngs["dropout"] = dropout_rng
+
+        inputs = {"params": params or self.params}
+
+        if self.config.add_cross_attention:
+            # if past_key_values are passed then cache is already initialized a private flag init_cache has to be passed
+            # down to ensure cache is used. It has to be made sure that cache is marked as mutable so that it can be
+            # changed by FlaxBertAttention module
+            if past_key_values:
+                inputs["cache"] = past_key_values
+                mutable = ["cache"]
+            else:
+                mutable = False
+
+            outputs = self.module.apply(
+                inputs,
+                jnp.array(input_ids, dtype="i4"),
+                jnp.array(attention_mask, dtype="i4"),
+                token_type_ids=jnp.array(token_type_ids, dtype="i4"),
+                position_ids=jnp.array(position_ids, dtype="i4"),
+                head_mask=jnp.array(head_mask, dtype="i4"),
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                deterministic=not train,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                rngs=rngs,
+                mutable=mutable,
+            )
+
+            # add updated cache to model output
+            if past_key_values is not None and return_dict:
+                outputs, past_key_values = outputs
+                outputs["past_key_values"] = unfreeze(past_key_values["cache"])
+                return outputs
+            elif past_key_values is not None and not return_dict:
+                outputs, past_key_values = outputs
+                outputs = outputs[:1] + (unfreeze(past_key_values["cache"]),) + outputs[1:]
+
+        else:
+            outputs = self.module.apply(
+                inputs,
+                jnp.array(input_ids, dtype="i4"),
+                jnp.array(attention_mask, dtype="i4"),
+                token_type_ids=jnp.array(token_type_ids, dtype="i4"),
+                position_ids=jnp.array(position_ids, dtype="i4"),
+                head_mask=jnp.array(head_mask, dtype="i4"),
+                deterministic=not train,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                rngs=rngs,
+            )
+
+        return outputs
+
+class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
+    """
+    An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
+    models.
+    """
+
+    config_class = StoBertConfig
+    base_model_prefix = "bert" # TODO/ is this rigt? should it be stobert?
+    module_class: nn.Module = None
+
+    def __init__(
+        self,
+        config: StoBertConfig,
         input_shape: Tuple = (1, 1),
         seed: int = 0,
         dtype: jnp.dtype = jnp.float32,
@@ -1303,6 +1721,77 @@ class FlaxBertModule(nn.Module):
             gradient_checkpointing=self.gradient_checkpointing,
         )
         self.pooler = FlaxBertPooler(self.config, dtype=self.dtype)
+
+    def __call__(
+        self,
+        input_ids,
+        attention_mask,
+        token_type_ids: Optional[jnp.ndarray] = None,
+        position_ids: Optional[jnp.ndarray] = None,
+        head_mask: Optional[jnp.ndarray] = None,
+        encoder_hidden_states: Optional[jnp.ndarray] = None,
+        encoder_attention_mask: Optional[jnp.ndarray] = None,
+        init_cache: bool = False,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+    ):
+        # make sure `token_type_ids` is correctly initialized when not passed
+        if token_type_ids is None:
+            token_type_ids = jnp.zeros_like(input_ids)
+
+        # make sure `position_ids` is correctly initialized when not passed
+        if position_ids is None:
+            position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_ids.shape)
+
+        hidden_states = self.embeddings(
+            input_ids, token_type_ids, position_ids, attention_mask, deterministic=deterministic
+        )
+        outputs = self.encoder(
+            hidden_states,
+            attention_mask,
+            head_mask=head_mask,
+            deterministic=deterministic,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            init_cache=init_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        hidden_states = outputs[0]
+        pooled = self.pooler(hidden_states) if self.add_pooling_layer else None
+
+        if not return_dict:
+            # if pooled is None, don't return it
+            if pooled is None:
+                return (hidden_states,) + outputs[1:]
+            return (hidden_states, pooled) + outputs[1:]
+
+        return FlaxStoBaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=hidden_states,
+            pooler_output=pooled,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            cross_attentions=outputs.cross_attentions,
+        )
+
+
+class FlaxStoBertModule(nn.Module):
+    config: StoBertConfig
+    dtype: jnp.dtype = jnp.float32  # the dtype of the computation
+    add_pooling_layer: bool = True
+    gradient_checkpointing: bool = False
+
+    def setup(self):
+        self.embeddings = FlaxStoBertEmbeddings(self.config, dtype=self.dtype)
+        self.encoder = FlaxStoBertEncoder(
+            self.config,
+            dtype=self.dtype,
+            gradient_checkpointing=self.gradient_checkpointing,
+        )
+        self.pooler = FlaxStoBertPooler(self.config, dtype=self.dtype)
 
     def __call__(
         self,
