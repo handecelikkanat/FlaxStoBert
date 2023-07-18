@@ -917,8 +917,6 @@ class FlaxStoBertModule(nn.Module):
 class FlaxStoBertModel(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertModule
 
-append_call_sample_docstring(FlaxBertModel, _CHECKPOINT_FOR_DOC, FlaxBaseModelOutputWithPooling, _CONFIG_FOR_DOC)
-
 append_call_sample_docstring(FlaxStoBertModel, _CHECKPOINT_FOR_DOC, FlaxStoBaseModelOutputWithPooling, _CONFIG_FOR_DOC)
 
 
