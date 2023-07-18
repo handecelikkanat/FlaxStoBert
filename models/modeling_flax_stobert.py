@@ -945,10 +945,10 @@ class FlaxStoBertModule(nn.Module):
         )
 
 
-@add_start_docstrings(
-    "The bare Bert Model transformer outputting raw hidden-states without any specific head on top.",
-    BERT_START_DOCSTRING,
-)
+#@add_start_docstrings(
+#    "The bare Bert Model transformer outputting raw hidden-states without any specific head on top.",
+#    BERT_START_DOCSTRING,
+#)
 class FlaxStoBertModel(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertModule
 
@@ -1017,42 +1017,42 @@ class FlaxStoBertForPreTrainingModule(nn.Module):
 
 
 
-@add_start_docstrings(
-    """
-    Stochastic implementation (node-bnn) of a Bert Model with two heads on top as done during the pretraining: a `masked language modeling` head and a `next
-    sentence prediction (classification)` head.
-    """,
-    BERT_START_DOCSTRING,
-)
+#@add_start_docstrings(
+#    """
+#    Stochastic implementation (node-bnn) of a Bert Model with two heads on top as done during the pretraining: a `masked language modeling` head and a `next
+#    sentence prediction (classification)` head.
+#    """,
+#    BERT_START_DOCSTRING,
+#)
 class FlaxStoBertForPreTraining(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertForPreTrainingModule
 
-FLAX_BERT_FOR_PRETRAINING_DOCSTRING = """
-    Returns:
-
-    Example:
-
-    ```python
-    >>> from transformers import AutoTokenizer, FlaxBertForPreTraining
-
-    >>> tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    >>> model = FlaxBertForPreTraining.from_pretrained("bert-base-uncased")
-
-    >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="np")
-    >>> outputs = model(**inputs)
-
-    >>> prediction_logits = outputs.prediction_logits
-    >>> seq_relationship_logits = outputs.seq_relationship_logits
-    ```
-"""
-
-overwrite_call_docstring(
-    FlaxStoBertForPreTraining,
-    BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length") + FLAX_BERT_FOR_PRETRAINING_DOCSTRING,
-)
-append_replace_return_docstrings(
-    FlaxStoBertForPreTraining, output_type=FlaxStoBertForPreTrainingOutput, config_class=_CONFIG_FOR_DOC
-)
+#FLAX_BERT_FOR_PRETRAINING_DOCSTRING = """
+#    Returns:
+#
+#    Example:
+#
+#    ```python
+#    >>> from transformers import AutoTokenizer, FlaxBertForPreTraining
+#
+#    >>> tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+#    >>> model = FlaxBertForPreTraining.from_pretrained("bert-base-uncased")
+#
+#    >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="np")
+#    >>> outputs = model(**inputs)
+#
+#    >>> prediction_logits = outputs.prediction_logits
+#    >>> seq_relationship_logits = outputs.seq_relationship_logits
+#    ```
+#"""
+#
+#overwrite_call_docstring(
+#    FlaxStoBertForPreTraining,
+#    BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length") + FLAX_BERT_FOR_PRETRAINING_DOCSTRING,
+#)
+#append_replace_return_docstrings(
+#    FlaxStoBertForPreTraining, output_type=FlaxStoBertForPreTrainingOutput, config_class=_CONFIG_FOR_DOC
+#)
 
 
 
@@ -1140,12 +1140,6 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
 class FlaxStoBertForSequenceClassification(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertForSequenceClassificationModule
 
-append_call_sample_docstring(
-    FlaxBertForSequenceClassification,
-    _CHECKPOINT_FOR_DOC,
-    FlaxSequenceClassifierOutput,
-    _CONFIG_FOR_DOC,
-)
 
 # TODO: other implementations pending: 
 #       take from transformers lib.
