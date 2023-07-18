@@ -1129,10 +1129,12 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         if not return_dict:
             return (logits,) + outputs[2:]
 
-        return FlaxSequenceClassifierOutput(
+        return FlaxStoSequenceClassifierOutput(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+
+            #Hande: TODO: add kl and entropy loss
         )
 
 
