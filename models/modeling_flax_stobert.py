@@ -24,7 +24,7 @@ from flax.core.frozen_dict import FrozenDict, freeze, unfreeze
 from flax.linen import combine_masks, make_causal_mask
 from flax.linen import partitioning as nn_partitioning
 from flax.linen.attention import dot_product_attention_weights
-from flax.linen.linear import Array
+#from flax.linen.linear import Array
 from flax.traverse_util import flatten_dict, unflatten_dict
 from jax import lax
 
@@ -259,7 +259,7 @@ class FlaxStoBertSelfAttention(nn.Module):
         init_cache: bool = False,
         deterministic=True,
         output_attentions: bool = False,
-        indices: Array = None,
+        indices: jnp.array = None,
     ):
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
@@ -362,7 +362,7 @@ class FlaxStoBertSelfOutput(nn.Module):
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
         self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
 
-    def __call__(self, hidden_states, input_tensor, deterministic: bool = True, indices: Array = None):
+    def __call__(self, hidden_states, input_tensor, deterministic: bool = True, indices: jnp.array = None):
         hidden_states = self.dense(hidden_states, indices)
         hidden_states = self.dropout(hidden_states, deterministic=deterministic)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
@@ -387,7 +387,7 @@ class FlaxStoBertAttention(nn.Module):
         init_cache=False,
         deterministic: bool=True,
         output_attentions: bool = False,
-        indices: Array = None,
+        indices: jnp.array = None,
     ):
         # Attention mask comes in as attention_mask.shape == (*batch_sizes, kv_length)
         # FLAX expects: attention_mask.shape == (*batch_sizes, 1, 1, kv_length) such that it is broadcastable
@@ -425,7 +425,7 @@ class Fl1axStoBertIntermediate(nn.Module):
         )
         self.activation = ACT2FN[self.config.hidden_act]
 
-    def __call__(self, hidden_states, indices: Array):
+    def __call__(self, hidden_states, indices: jnp.array):
         hidden_states = self.dense(hidden_states, indices)
         hidden_states = self.activation(hidden_states)
         return hidden_states
@@ -444,7 +444,7 @@ class FlaxStoBertOutput(nn.Module):
         #self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
 
-    def __call__(self, hidden_states, attention_output, deterministic: bool = True, indices: Array = None):
+    def __call__(self, hidden_states, attention_output, deterministic: bool = True, indices: jnp.array = None):
         hidden_states = self.dense(hidden_states, indices)
         hidden_states = self.dropout(hidden_states, deterministic=deterministic)
         hidden_states = self.LayerNorm(hidden_states + attention_output)
@@ -472,7 +472,7 @@ class FlaxStoBertLayer(nn.Module):
         init_cache: bool = False,
         deterministic: bool = True,
         output_attentions: bool = False,
-        indices: Array = None,
+        indices: jnp.array = None,
     ):
         # Self Attention
         attention_outputs = self.attention(
@@ -536,12 +536,12 @@ class FlaxStoBertLayerCollection(nn.Module):
         head_mask,
         encoder_hidden_states: Optional[jnp.ndarray] = None,
         encoder_attention_mask: Optional[jnp.ndarray] = None,
-        init_cache: Optional[bool] = False,
-        deterministic: Optional[bool] = True,
-        output_attentions: Optional[bool] = False,
-        output_hidden_states: Optional[bool] = False,
-        return_dict: Optional[bool] = True,
-        indices: Optional[torch.Tensor] = None,
+        init_cache: bool = False,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+        indices: jnp.array = None,
     ):
         all_attentions = () if output_attentions else None
         all_hidden_states = () if output_hidden_states else None
@@ -614,12 +614,12 @@ class FlaxStoBertEncoder(nn.Module):
         head_mask,
         encoder_hidden_states: Optional[jnp.ndarray] = None,
         encoder_attention_mask: Optional[jnp.ndarray] = None,
-        init_cache: Optional[bool] = False,
-        deterministic: Optional[bool] = True,
-        output_attentions: Optional[bool] = False,
-        output_hidden_states: Optional[bool] = False,
-        return_dict: Optional[bool] = True,
-        indices: Optional[torch.Tensor] = None,	
+        init_cache: bool = False,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+        indices: jnp.array = None,	
     ):
         return self.layer(
             hidden_states,
@@ -888,11 +888,13 @@ class FlaxStoBertModule(nn.Module):
         head_mask: Optional[jnp.ndarray] = None,
         encoder_hidden_states: Optional[jnp.ndarray] = None,
         encoder_attention_mask: Optional[jnp.ndarray] = None,
-        init_cache: Optional[bool] = False,
-        deterministic: Optional[bool] = True,
-        output_attentions: Optional[bool] = False,
-        output_hidden_states: Optional[bool] = False,
-        return_dict: Optional[bool] = True,
+        init_cache: bool = False,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+        indices: jnp.array = None,
+
     ):
         # make sure `token_type_ids` is correctly initialized when not passed
         if token_type_ids is None:
@@ -904,7 +906,11 @@ class FlaxStoBertModule(nn.Module):
 
         # Hande: From Elaine: change indices from 1D to 2D [batch_size, seq_length]
         # TODO: Convert to jax/flax
-        indices = torch.unsqueeze(indices, dim=1).repeat(1, seq_length)
+        # indices = torch.unsqueeze(indices, dim=1).repeat(1, seq_length)
+        print("DEBUG: indices #1:", indices)
+        indices = indices.repeat(1, seq_length)
+        print("DEBUG: indices #2:", indices)
+
 
         hidden_states = self.embeddings(
             input_ids, token_type_ids, position_ids, attention_mask, deterministic=deterministic
@@ -1095,21 +1101,26 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         token_type_ids,
         position_ids,
         head_mask,
-        deterministic: Optional[bool] = True,
-        output_attentions: Optional[bool] = False,
-        output_hidden_states: Optional[bool] = False,
-        return_dict: Optional[bool] = True,
-        indices: Optional[torch.Tensor] = None,
-        n_samples: Optional[int] = 1,
+        deterministic: bool = True,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        return_dict: bool = True,
+        indices: jnp.array = None,
+        n_samples: int = 1,
     ):
 
         #Hande: TODO: Convert from torch to flax/jax
         if n_samples > 1:
-            input_ids = torch.repeat_interleave(input_ids, n_samples, dim=0)
-            attention_mask = torch.repeat_interleave(attention_mask, n_samples, dim=0)
-            token_type_ids = torch.repeat_interleave(token_type_ids, n_samples, dim=0)
+            #input_ids = torch.repeat_interleave(input_ids, n_samples, dim=0)
+            #attention_mask = torch.repeat_interleave(attention_mask, n_samples, dim=0)
+            #token_type_ids = torch.repeat_interleave(token_type_ids, n_samples, dim=0)
+            input_ids = input_ids.repeat(n_samples)
+            attention_mask = attention_mask.repeat(n_samples)
+            token_type_ids = token_type_ids.repeat(n_samples)
+
         if indices is None:
-            indices = torch.arange(input_ids.size(0), dtype=torch.long, device=input_ids.device) % self.config.n_components
+            #indices = torch.arange(input_ids.size(0), dtype=torch.long, device=input_ids.device) % self.config.n_components
+            indices = jnp.zeros(input_ids.size(0), dtype=jnp.long)
 
         # Model
         outputs = self.bert(
