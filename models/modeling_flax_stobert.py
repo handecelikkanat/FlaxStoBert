@@ -1093,7 +1093,6 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         n_samples: int = 1,
     ):
 
-        #Hande: TODO: Convert from torch to flax/jax
         if n_samples > 1:
             #input_ids = torch.repeat_interleave(input_ids, n_samples, dim=0)
             #attention_mask = torch.repeat_interleave(attention_mask, n_samples, dim=0)
