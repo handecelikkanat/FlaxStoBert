@@ -1137,16 +1137,6 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
 
 
 
-@add_start_docstrings(
-    """
-    Bert Model transformer with a sequence classification/regression head on top (a linear layer on top of the pooled
-    output) e.g. for GLUE tasks.
-    """,
-    BERT_START_DOCSTRING,
-)
-class FlaxBertForSequenceClassification(FlaxBertPreTrainedModel):
-    module_class = FlaxBertForSequenceClassificationModule
-
 class FlaxStoBertForSequenceClassification(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertForSequenceClassificationModule
 
