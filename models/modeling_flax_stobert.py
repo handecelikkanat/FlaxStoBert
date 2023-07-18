@@ -254,11 +254,11 @@ class FlaxStoBertSelfAttention(nn.Module):
         hidden_states,
         attention_mask,
         layer_head_mask,
-        indices: torch.Tensor,
         key_value_states: Optional[jnp.array] = None,
         init_cache: bool = False,
         deterministic=True,
         output_attentions: bool = False,
+        indices: torch.Tensor = None,
     ):
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
@@ -361,7 +361,7 @@ class FlaxStoBertSelfOutput(nn.Module):
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
         self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
 
-    def __call__(self, hidden_states, input_tensor, indices: torch.Tensor, deterministic: bool = True):
+    def __call__(self, hidden_states, input_tensor, deterministic: bool = True, indices: torch.Tensor = None):
         hidden_states = self.dense(hidden_states, indices)
         hidden_states = self.dropout(hidden_states, deterministic=deterministic)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
@@ -382,11 +382,11 @@ class FlaxStoBertAttention(nn.Module):
         hidden_states,
         attention_mask,
         layer_head_mask,
-        indices,
         key_value_states=None,
         init_cache=False,
         deterministic: bool=True,
         output_attentions: bool = False,
+        indices: torch.Tensor = None,
     ):
         # Attention mask comes in as attention_mask.shape == (*batch_sizes, kv_length)
         # FLAX expects: attention_mask.shape == (*batch_sizes, 1, 1, kv_length) such that it is broadcastable
@@ -395,14 +395,14 @@ class FlaxStoBertAttention(nn.Module):
             hidden_states,
             attention_mask,
             layer_head_mask=layer_head_mask,
-            indices,
             key_value_states=key_value_states,
             init_cache=init_cache,
             deterministic=deterministic,
             output_attentions=output_attentions,
+            indices=indices,
         )
         attn_output = attn_outputs[0]
-        hidden_states = self.output(attn_output, hidden_states, indices, deterministic=deterministic)
+        hidden_states = self.output(attn_output, hidden_states, deterministic=deterministic, indices=indices)
 
         outputs = (hidden_states,)
 
@@ -443,7 +443,7 @@ class FlaxStoBertOutput(nn.Module):
         #self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
 
-    def __call__(self, hidden_states, attention_output, indices: torch.Tensor, deterministic: bool = True)
+    def __call__(self, hidden_states, attention_output, deterministic: bool = True, indices: torch.Tensor = None)
         hidden_states = self.dense(hidden_states, indices)
         hidden_states = self.dropout(hidden_states, deterministic=deterministic)
         hidden_states = self.LayerNorm(hidden_states + attention_output)
@@ -493,12 +493,12 @@ class FlaxStoBertLayer(nn.Module):
                 key_value_states=encoder_hidden_states,
                 deterministic=deterministic,
                 output_attentions=output_attentions,
-                indices,
+                indices=indices,
             )
             attention_output = cross_attention_outputs[0]
 
         hidden_states = self.intermediate(attention_output, indices)
-        hidden_states = self.output(hidden_states, attention_output, deterministic=deterministic, indices)
+        hidden_states = self.output(hidden_states, attention_output, deterministic=deterministic, indices=indices)
 
         outputs = (hidden_states,)
 
@@ -566,7 +566,7 @@ class FlaxStoBertLayerCollection(nn.Module):
                 init_cache,
                 deterministic,
                 output_attentions,
-                indices,
+                indices=indices,
             )
 
             hidden_states = layer_outputs[0]
