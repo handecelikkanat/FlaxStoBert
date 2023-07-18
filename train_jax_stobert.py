@@ -41,7 +41,7 @@ from models.modeling_flax_stobert import (
 )
 #from models.modeling_outputs import StoSequenceClassifierOutput
 from models.config import StoBertConfig
-from data import get_nli_dataset
+from .data import get_nli_dataset
 
 logger = logging.getLogger(__name__)
 
