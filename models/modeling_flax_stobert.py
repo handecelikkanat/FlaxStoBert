@@ -36,7 +36,6 @@ from transformers.modeling_flax_outputs import (
     FlaxMultipleChoiceModelOutput,
     FlaxNextSentencePredictorOutput,
     FlaxQuestionAnsweringModelOutput,
-    FlaxSequenceClassifierOutput,
     FlaxTokenClassifierOutput,
 )
 from transformers.modeling_flax_utils import (
@@ -101,6 +100,37 @@ BERT_INPUTS_DOCSTRING = r"""
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 
 """
+
+@flax.struct.dataclass
+class FlaxStoSequenceClassifierOutput(ModelOutput):
+    """
+    Base class for outputs of sentence classification models.
+
+    Args:
+        logits (`jnp.ndarray` of shape `(batch_size, config.num_labels)`):
+            Classification (or regression if config.num_labels==1) scores (before SoftMax).
+        hidden_states (`tuple(jnp.ndarray)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `jnp.ndarray` (one for the output of the embeddings + one for the output of each layer) of shape
+            `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
+        attentions (`tuple(jnp.ndarray)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `jnp.ndarray` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    logits: jnp.ndarray = None
+    hidden_states: Optional[Tuple[jnp.ndarray]] = None
+    attentions: Optional[Tuple[jnp.ndarray]] = None
+    #Hande: Additional:
+    loss: Optional[torch.FloatTensor] = None
+    kl: Optional[torch.FloatTensor] = None
+    entropy: Optional[torch.FloatTensor] = None
+    eloglike: Optional[torch.FloatTensor] = None    
+
 
 
 class FlaxStoBertEmbeddings(nn.Module):
