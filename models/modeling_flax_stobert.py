@@ -914,10 +914,7 @@ class FlaxStoBertModule(nn.Module):
     "The bare Bert Model transformer outputting raw hidden-states without any specific head on top.",
     BERT_START_DOCSTRING,
 )
-class FlaxBertModel(FlaxBertPreTrainedModel):
-    module_class = FlaxBertModule
-
-class FlaxStoBertModel(FlaxBertPreTrainedModel):
+class FlaxStoBertModel(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertModule
 
 append_call_sample_docstring(FlaxBertModel, _CHECKPOINT_FOR_DOC, FlaxBaseModelOutputWithPooling, _CONFIG_FOR_DOC)
