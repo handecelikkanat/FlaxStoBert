@@ -46,7 +46,7 @@ from transformers.modeling_flax_utils import (
     overwrite_call_docstring,
 )
 
-from transformers.modeling_flax_bert import (
+from transformers.models.bert.modeling_flax_bert import (
         FlaxBertForPreTrainingOutput
 )
 
