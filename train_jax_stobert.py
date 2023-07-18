@@ -14,7 +14,6 @@ import numpy as np
 import sys
 import time
 
-from accelerate import Accelerator
 from transformers import (
     BertTokenizer,
     RobertaTokenizer,
@@ -33,15 +32,14 @@ from scipy.stats import entropy
 import torch.distributions as D
 import evaluate
 
-from data import get_nli_dataset
 #from models.modeling_bert import BertForSequenceClassification
 from models.modeling_flax_stobert import (
         FlaxStoBertForSequenceClassification, 
         FlaxStoSequenceClassifierOutput,
 )
-#from models.modeling_outputs import StoSequenceClassifierOutput
+#from models_nli.modeling_outputs import StoSequenceClassifierOutput
 from models.config import StoBertConfig
-from .data import get_nli_dataset
+from data_nli import get_nli_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +225,6 @@ def main():
 
     args = parse_args()
 
-    # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
-    #accelerator = Accelerator()
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
@@ -236,11 +232,7 @@ def main():
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
-    logger.info(accelerator.state)
-
-    # Setup logging, we only want one process per machine to log things on the screen.
-    # accelerator.is_local_main_process is only True for one process per machine.
-    logger.setLevel(logging.INFO if accelerator.is_local_main_process else logging.ERROR)
+    logger.setLevel(logging.INFO)
 
     # If passed along, set the training seed now.
     #if args.seed is not None:

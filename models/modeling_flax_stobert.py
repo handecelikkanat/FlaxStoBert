@@ -189,17 +189,17 @@ class FlaxStoBertSelfAttention(nn.Module):
                 "                   : {self.config.num_attention_heads}"
             )
 
-        self.query = nn.StoDense(
+        self.query = StoDense(
             self.config.hidden_size,
             dtype=self.dtype,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
         )
-        self.key = nn.StoDense(
+        self.key = StoDense(
             self.config.hidden_size,
             dtype=self.dtype,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
         )
-        self.value = nn.StoDense(
+        self.value = StoDense(
             self.config.hidden_size,
             dtype=self.dtype,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
@@ -353,7 +353,7 @@ class FlaxStoBertSelfOutput(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = nn.StoDense(
+        self.dense = StoDense(
             self.config.hidden_size,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
             dtype=self.dtype,
@@ -417,7 +417,7 @@ class Fl1axStoBertIntermediate(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = nn.StoDense(
+        self.dense = StoDense(
             self.config.intermediate_size,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
             dtype=self.dtype,
@@ -435,7 +435,7 @@ class FlaxStoBertOutput(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = nn.StoDense(
+        self.dense = StoDense(
             self.config.hidden_size,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
             dtype=self.dtype,
@@ -641,7 +641,7 @@ class FlaxStoBertPooler(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = nn.StoDense(
+        self.dense = StoDense(
             self.config.hidden_size,
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
             dtype=self.dtype,
@@ -660,7 +660,7 @@ class FlaxStoBertPreTrainingHeads(nn.Module):
 
     def setup(self):
         self.predictions = FlaxStoBertLMPredictionHead(self.config, dtype=self.dtype)
-        self.seq_relationship = nn.StoDense(2, dtype=self.dtype)
+        self.seq_relationship = StoDense(2, dtype=self.dtype)
 
     def __call__(self, hidden_states, pooled_output, shared_embedding=None):
         prediction_scores = self.predictions(hidden_states, shared_embedding=shared_embedding)
@@ -1073,7 +1073,7 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
             else self.config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(rate=classifier_dropout)
-        self.classifier = nn.StoDense(
+        self.classifier = StoDense(
             self.config.num_labels,
             dtype=self.dtype,
         )
