@@ -127,10 +127,10 @@ class FlaxStoSequenceClassifierOutput(ModelOutput):
     hidden_states: Optional[Tuple[jnp.ndarray]] = None
     attentions: Optional[Tuple[jnp.ndarray]] = None
     #Hande: Additional:
-    loss: Optional[torch.FloatTensor] = None
-    kl: Optional[torch.FloatTensor] = None
-    entropy: Optional[torch.FloatTensor] = None
-    eloglike: Optional[torch.FloatTensor] = None    
+    loss: Optional[jnp.ndarray] = None
+    kl: Optional[jnp.ndarray] = None
+    entropy: Optional[jnp.ndarray] = None
+    eloglike: Optional[jnp.ndarray] = None    
 
 
 
