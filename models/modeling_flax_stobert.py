@@ -443,7 +443,7 @@ class FlaxStoBertOutput(nn.Module):
         #self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
 
-    def __call__(self, hidden_states, attention_output, deterministic: bool = True, indices: torch.Tensor = None)
+    def __call__(self, hidden_states, attention_output, deterministic: bool = True, indices: torch.Tensor = None):
         hidden_states = self.dense(hidden_states, indices)
         hidden_states = self.dropout(hidden_states, deterministic=deterministic)
         hidden_states = self.LayerNorm(hidden_states + attention_output)
@@ -471,6 +471,7 @@ class FlaxStoBertLayer(nn.Module):
         init_cache: bool = False,
         deterministic: bool = True,
         output_attentions: bool = False,
+        indices: torch.Tensor = None,
     ):
         # Self Attention
         attention_outputs = self.attention(
