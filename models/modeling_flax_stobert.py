@@ -481,7 +481,7 @@ class FlaxStoBertLayer(nn.Module):
             init_cache=init_cache,
             deterministic=deterministic,
             output_attentions=output_attentions,
-            indices: Optional[torch.Tensor] = None,
+            indices=indices,
         )
         attention_output = attention_outputs[0]
 
