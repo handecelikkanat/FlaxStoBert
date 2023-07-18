@@ -52,8 +52,8 @@ from transformers.models.bert.modeling_flax_bert import (
 )
 
 from transformers.utils import ModelOutput, add_start_docstrings, add_start_docstrings_to_model_forward, logging
-from transformers.models.bert.configuration_bert import BertConfig
 
+from .config import StoBertConfig
 from .stochastic_layers import Dense as StoDense
 
 logger = logging.get_logger(__name__)
