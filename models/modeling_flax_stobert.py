@@ -48,7 +48,6 @@ from transformers.modeling_flax_utils import (
 )
 
 from transformers.models.bert.modeling_flax_bert import (
-        FlaxBertForPreTrainingOutput,
         BERT_START_DOCSTRING,
         BERT_INPUTS_DOCSTRING,
 )
@@ -95,6 +94,42 @@ class FlaxStoSequenceClassifierOutput(ModelOutput):
     kl: Optional[jnp.ndarray] = None
     entropy: Optional[jnp.ndarray] = None
     eloglike: Optional[jnp.ndarray] = None    
+
+
+@flax.struct.dataclass
+class FlaxStoBertForPreTrainingOutput(ModelOutput):
+    """
+    Output type of [`BertForPreTraining`].
+
+    Args:
+        prediction_logits (`jnp.ndarray` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        seq_relationship_logits (`jnp.ndarray` of shape `(batch_size, 2)`):
+            Prediction scores of the next sequence prediction (classification) head (scores of True/False continuation
+            before SoftMax).
+        hidden_states (`tuple(jnp.ndarray)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `jnp.ndarray` (one for the output of the embeddings + one for the output of each layer) of shape
+            `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
+        attentions (`tuple(jnp.ndarray)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `jnp.ndarray` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    prediction_logits: jnp.ndarray = None
+    seq_relationship_logits: jnp.ndarray = None
+    hidden_states: Optional[Tuple[jnp.ndarray]] = None
+    attentions: Optional[Tuple[jnp.ndarray]] = None
+    #Hande: Additional:
+    loss: Optional[jnp.ndarray] = None
+    kl: Optional[jnp.ndarray] = None
+    entropy: Optional[jnp.ndarray] = None
+    eloglike: Optional[jnp.ndarray] = None
+
 
 
 
@@ -976,6 +1011,8 @@ class FlaxStoBertForPreTrainingModule(nn.Module):
             seq_relationship_logits=seq_relationship_score,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+
+            #Hande: FIXME: Here add also kl and entropy loss information
         )
 
 
@@ -1010,11 +1047,11 @@ FLAX_BERT_FOR_PRETRAINING_DOCSTRING = """
 """
 
 overwrite_call_docstring(
-    FlaxBertForPreTraining,
+    FlaxStoBertForPreTraining,
     BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length") + FLAX_BERT_FOR_PRETRAINING_DOCSTRING,
 )
 append_replace_return_docstrings(
-    FlaxBertForPreTraining, output_type=FlaxBertForPreTrainingOutput, config_class=_CONFIG_FOR_DOC
+    FlaxStoBertForPreTraining, output_type=FlaxStoBertForPreTrainingOutput, config_class=_CONFIG_FOR_DOC
 )
 
 
