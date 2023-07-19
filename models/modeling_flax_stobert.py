@@ -412,7 +412,7 @@ class FlaxStoBertAttention(nn.Module):
         return outputs
 
 
-class Fl1axStoBertIntermediate(nn.Module):
+class FlaxStoBertIntermediate(nn.Module):
     config: StoBertConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
@@ -895,6 +895,7 @@ class FlaxStoBertModule(nn.Module):
         indices: jnp.array = None,
 
     ):
+
         # make sure `token_type_ids` is correctly initialized when not passed
         if token_type_ids is None:
             token_type_ids = jnp.zeros_like(input_ids)
@@ -906,9 +907,11 @@ class FlaxStoBertModule(nn.Module):
         # Hande: From Elaine: change indices from 1D to 2D [batch_size, seq_length]
         # TODO: Convert to jax/flax
         # indices = torch.unsqueeze(indices, dim=1).repeat(1, seq_length)
-        print("DEBUG: indices #1:", indices)
-        indices = indices.repeat(1, seq_length)
-        print("DEBUG: indices #2:", indices)
+        
+        batch_size, seq_length = input_ids.shape
+        #Hande: FIXME: Double-check. Trying to achieve the effect in the above numpy unsqueeze & repeat
+        indices = jnp.expand_dims(indices, axis=1).repeat(seq_length, axis=1)
+        
 
 
         hidden_states = self.embeddings(
@@ -1103,7 +1106,7 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
 
         if indices is None:
             #indices = torch.arange(input_ids.size(0), dtype=torch.long, device=input_ids.device) % self.config.n_components
-            indices = jnp.zeros(input_ids.size(0), dtype=jnp.long)
+            indices = jnp.zeros(input_ids.shape[0], dtype=jnp.int16)
 
         # Model
         outputs = self.bert(
