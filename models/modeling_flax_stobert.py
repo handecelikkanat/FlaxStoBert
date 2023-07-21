@@ -50,6 +50,7 @@ from transformers.modeling_flax_utils import (
 from transformers.models.bert.modeling_flax_bert import (
         BERT_START_DOCSTRING,
         BERT_INPUTS_DOCSTRING,
+        FlaxBertPooler,
 )
 
 from transformers.utils import ModelOutput, add_start_docstrings, add_start_docstrings_to_model_forward, logging
@@ -636,24 +637,6 @@ class FlaxStoBertEncoder(nn.Module):
 
 
 
-class FlaxStoBertPooler(nn.Module):
-    config: StoBertConfig
-    dtype: jnp.dtype = jnp.float32  # the dtype of the computation
-
-    def setup(self):
-        self.dense = StoDense(
-            self.config.hidden_size,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-            dtype=self.dtype,
-        )
-
-    def __call__(self, hidden_states):
-        cls_hidden_state = hidden_states[:, 0]
-        cls_hidden_state = self.dense(cls_hidden_state)
-        return nn.tanh(cls_hidden_state)
-
-
-
 class FlaxStoBertPreTrainingHeads(nn.Module):
     config: StoBertConfig
     dtype: jnp.dtype = jnp.float32
@@ -877,7 +860,7 @@ class FlaxStoBertModule(nn.Module):
             dtype=self.dtype,
             gradient_checkpointing=self.gradient_checkpointing,
         )
-        self.pooler = FlaxStoBertPooler(self.config, dtype=self.dtype)
+        self.pooler = FlaxBertPooler(self.config, dtype=self.dtype)
 
     def __call__(
         self,
@@ -909,11 +892,13 @@ class FlaxStoBertModule(nn.Module):
         # TODO: Convert to jax/flax
         # indices = torch.unsqueeze(indices, dim=1).repeat(1, seq_length)
         
+
         batch_size, seq_length = input_ids.shape
+        
         #Hande: FIXME: Double-check. Trying to achieve the effect in the above numpy unsqueeze & repeat
         indices = jnp.expand_dims(indices, axis=1).repeat(seq_length, axis=1)
-        
 
+        print("indices shape in FlaxStoBertModule is ", indices.shape)
 
         hidden_states = self.embeddings(
             input_ids, token_type_ids, position_ids, attention_mask, deterministic=deterministic
@@ -1077,7 +1062,12 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
             else self.config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(rate=classifier_dropout)
-        self.classifier = StoDense(
+
+        #TODO: Change this flax.linen.Dense to StoDense. 
+        #TODO: Change the dimensionality of indices that go into this StoDense
+        #      layer to [Batch size x Encoding size], removing the Sequence_Length
+        #      dimension
+        self.classifier = flax.linen.Dense(
             self.config.num_labels,
             dtype=self.dtype,
         )
@@ -1107,7 +1097,7 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
 
         if indices is None:
             #indices = torch.arange(input_ids.size(0), dtype=torch.long, device=input_ids.device) % self.config.n_components
-            indices = jnp.zeros(input_ids.shape[0], dtype=jnp.int16)
+            indices = jnp.zeros(input_ids.shape[0], dtype=jnp.int16) % self.config.n_components
 
         # Model
         outputs = self.bert(
