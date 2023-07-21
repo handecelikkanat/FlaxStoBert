@@ -440,7 +440,7 @@ class FlaxStoBertOutput(nn.Module):
             kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
             dtype=self.dtype,
         )
-        #self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
+        self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
 
     def __call__(self, hidden_states, attention_output, deterministic: bool = True, indices: jnp.array = None):
@@ -711,8 +711,9 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         attention_mask = jnp.ones_like(input_ids)
         head_mask = jnp.ones((self.config.num_hidden_layers, self.config.num_attention_heads))
 
-        params_rng, dropout_rng = jax.random.split(rng)
-        rngs = {"params": params_rng, "dropout": dropout_rng}
+        #TODO: Check
+        params_rng, dropout_rng, low_rank_rng = jax.random.split(rng, 3)
+        rngs = {"params": params_rng, "dropout": dropout_rng, "low-rank": low_rank_rng}
 
         if self.config.add_cross_attention:
             encoder_hidden_states = jnp.zeros(input_shape + (self.config.hidden_size,))
