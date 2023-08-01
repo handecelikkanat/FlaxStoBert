@@ -1,4 +1,4 @@
-# coding=utf-8
+#coding=utf-8
 # Copyright 2021 The Google Flax Team Authors and The HuggingFace Inc. team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -694,24 +694,32 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         attention_mask = jnp.ones_like(input_ids)
         head_mask = jnp.ones((self.config.num_hidden_layers, self.config.num_attention_heads))
 
-        #TODO: Check
-        params_rng, dropout_rng, low_rank_rng = jax.random.split(rng, 3)
-        rngs = {"params": params_rng, "dropout": dropout_rng, "low-rank": low_rank_rng}
 
+	#Hande: POINT1
+
+        #TODO: Check
+        params_rng, dropout_rng, low_rank_rng, categorical_rng = jax.random.split(rng, 4)
+        rngs = {"params": params_rng, "dropout": dropout_rng, 
+                "low-rank": low_rank_rng, "categorical": categorical_rng}
+
+        #TODO: If implementing cross attention, open here:
         if self.config.add_cross_attention:
-            encoder_hidden_states = jnp.zeros(input_shape + (self.config.hidden_size,))
-            encoder_attention_mask = attention_mask
-            module_init_outputs = self.module.init(
-                rngs,
-                input_ids,
-                attention_mask,
-                token_type_ids,
-                position_ids,
-                head_mask,
-                encoder_hidden_states,
-                encoder_attention_mask,
-                return_dict=False,
-            )
+            pass
+            #open from here
+            #encoder_hidden_states = jnp.zeros(input_shape + (self.config.hidden_size,))
+            #encoder_attention_mask = attention_mask
+            #module_init_outputs = self.module.init(
+            #    rngs,
+            #    input_ids,
+            #    attention_mask,
+            #    token_type_ids,
+            #    position_ids,
+            #    head_mask,
+            #    encoder_hidden_states,
+            #    encoder_attention_mask,
+            #    return_dict=False,
+            #)
+            #until here
         else:
             module_init_outputs = self.module.init(
                 rngs, input_ids, attention_mask, token_type_ids, position_ids, head_mask, return_dict=False
@@ -749,7 +757,7 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         )
         return unfreeze(init_variables["cache"])
 
-    @add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
+    #@add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     def __call__(
         self,
         input_ids,
@@ -797,37 +805,41 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
             # if past_key_values are passed then cache is already initialized a private flag init_cache has to be passed
             # down to ensure cache is used. It has to be made sure that cache is marked as mutable so that it can be
             # changed by FlaxBertAttention module
-            if past_key_values:
-                inputs["cache"] = past_key_values
-                mutable = ["cache"]
-            else:
-                mutable = False
+   
+            #TODO: open from here if this part is going to be implemented...          
+            #if past_key_values:
+            #    inputs["cache"] = past_key_values
+            #    mutable = ["cache"]
+            #else:
+            #    mutable = False
 
-            outputs = self.module.apply(
-                inputs,
-                jnp.array(input_ids, dtype="i4"),
-                jnp.array(attention_mask, dtype="i4"),
-                token_type_ids=jnp.array(token_type_ids, dtype="i4"),
-                position_ids=jnp.array(position_ids, dtype="i4"),
-                head_mask=jnp.array(head_mask, dtype="i4"),
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_attention_mask,
-                deterministic=not train,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                rngs=rngs,
-                mutable=mutable,
-            )
+            #outputs = self.module.apply(
+            #    inputs,
+            #    jnp.array(input_ids, dtype="i4"),
+            #    jnp.array(attention_mask, dtype="i4"),
+            #    token_type_ids=jnp.array(token_type_ids, dtype="i4"),
+            #    position_ids=jnp.array(position_ids, dtype="i4"),
+            #    head_mask=jnp.array(head_mask, dtype="i4"),
+            #    encoder_hidden_states=encoder_hidden_states,
+            #    encoder_attention_mask=encoder_attention_mask,
+            #    deterministic=not train,
+            #    output_attentions=output_attentions,
+            #    output_hidden_states=output_hidden_states,
+            #    return_dict=return_dict,
+            #    rngs=rngs,
+            #    mutable=mutable,
+            #)
 
-            # add updated cache to model output
-            if past_key_values is not None and return_dict:
-                outputs, past_key_values = outputs
-                outputs["past_key_values"] = unfreeze(past_key_values["cache"])
-                return outputs
-            elif past_key_values is not None and not return_dict:
-                outputs, past_key_values = outputs
-                outputs = outputs[:1] + (unfreeze(past_key_values["cache"]),) + outputs[1:]
+            ## add updated cache to model output
+            #if past_key_values is not None and return_dict:
+            #    outputs, past_key_values = outputs
+            #    outputs["past_key_values"] = unfreeze(past_key_values["cache"])
+            #    return outputs
+            #elif past_key_values is not None and not return_dict:
+            #    outputs, past_key_values = outputs
+            #    outputs = outputs[:1] + (unfreeze(past_key_values["cache"]),) + outputs[1:]
+            #TODO: open until here
+            pass
 
         else:
             outputs = self.module.apply(
@@ -837,12 +849,13 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
                 token_type_ids=jnp.array(token_type_ids, dtype="i4"),
                 position_ids=jnp.array(position_ids, dtype="i4"),
                 head_mask=jnp.array(head_mask, dtype="i4"),
+		#TODO add gold labels here?
                 deterministic=not train,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
                 rngs=rngs,
-            )
+            ) #This apply function calls the __call__ function of the module
 
         return outputs
 
@@ -1044,7 +1057,7 @@ class FlaxStoBertForPreTraining(FlaxStoBertPreTrainedModel):
 #)
 
 
-
+#Hande: This is the pytorch-like module
 class FlaxStoBertForSequenceClassificationModule(nn.Module):
     config: StoBertConfig
     dtype: jnp.dtype = jnp.float32
@@ -1072,6 +1085,8 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
             dtype=self.dtype,
         )
 
+
+    #equivalent of pytorch forward function
     def __call__(
         self,
         input_ids,
@@ -1079,12 +1094,14 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         token_type_ids,
         position_ids,
         head_mask,
+	labels: jnp.array, #TODO: Make sure this is in the **batch argument to the model call
         deterministic: bool = True,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
         return_dict: bool = True,
-        indices: jnp.array = None,
-        n_samples: int = 1,
+        #TODO: Where is the rngs here that were sent into module.apply() function?
+        indices: jnp.array = None, #ADDED
+        n_samples: int = 1,        #ADDED    
     ):
 
         if n_samples > 1:
@@ -1117,17 +1134,10 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         pooled_output = self.dropout(pooled_output, deterministic=deterministic)
         logits = self.classifier(pooled_output)
 
-        #Hande: TODO: Calculate kl and entropy for loss
-
-        if not return_dict:
-            return (logits,) + outputs[2:]
-
         return FlaxStoSequenceClassifierOutput(
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-
-            #Hande: TODO: add kl and entropy loss
         )
 
 

@@ -221,6 +221,62 @@ def evaluate_stochastic(model, dataloader, num_samples, top_n=1):
     return result
 
 
+
+
+
+def train_step(state, batch, train_step_rng):
+    targets = batch.pop("labels")
+    dropout_rng, categorical_rng, new_train_step_rng = jax.random.split(train_step_rng, 3)
+
+    def loss_function(params):
+
+	# TODO: out apply function returns FlaxStoSequenceClassifierOutput
+        output = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+	logits = output.logits
+
+	loss = state.loss_function(logits, targets)
+
+        #for calculating the kl loss and entropy, now we use categorical_rng
+
+        #Hande: TODO: Calculate kl and entropy for loss
+        # TODO: Convert code from torch to jax/flax
+        # Stochastic Bert:  compute NLL, KL and entropy losses
+        loss = None
+        kl = None
+        entropy = None
+        if labels is not None:
+            if n_samples > 1:
+                labels = torch.repeat_interleave(labels, n_samples, dim=0)
+            loss = D.Categorical(logits=logits).log_prob(labels).mean()
+            kl, entropy = self.kl_and_entropy(self.config.kl_type, self.config.entropy_type)
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+
+        if not return_dict:
+            return (logits,) + outputs[2:]
+
+        return FlaxStoSequenceClassifierOutput(
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+
+            #Hande: TODO: add kl and entropy loss
+        )
+
+
+        return loss
+
+    grad_function = jax.value_and_grad(loss_function)
+    loss, grad = grad_function(state.params)
+    grad = jax.lax.pmean(grad, "batch")
+    new_state = state.apply_gradients(grads=grad)
+    metrics = jax.lax.pmean({"loss": loss, "learning_rate": learning_rate_function(state.step)}, axis_name="batch")
+    return new_state, metrics, new_train_step_rng
+
+
+
 def main():
 
     args = parse_args()
@@ -238,17 +294,59 @@ def main():
     #if args.seed is not None:
     #    set_seed(args.seed)
 
+    # RNG
+    rng = jax.random.PRNGKey(seed)
+    dropout_rngs = jax.random.split(rng, jax.local_device_count())
+
     # Tokenizer
     config = StoBertConfig()
     tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path)
 
-        # Model
+    # Model
     #model = StoBertForSequenceClassification(config).from_pretrained(args.model_name_or_path, config=config, num_labels=3)
     config.num_labels = args.num_labels
     model = FlaxStoBertForSequenceClassification(config).from_pretrained(
         args.model_name_or_path, config=config
     )
-    
+   
+    #prep data
+    #prepare the train_loader, test_loader, eval_loader    
+
+
+    #calculate number of training steps
+
+    #create the parallel_train_step function
+    parallel_train_step = jax.pmap(train_step, axis_name="batch", donate_argnums=(0,))
+
+    #TRAINING LOOP:
+    for i, epoch in enumerate(tqdm(range(1, num_train_epochs + 1), desc=f"Epoch ...", position=0, leave=True)):
+
+    	rng, input_rng = jax.random.split(rng)
+
+    	# Train
+    	with tqdm(total=len(train_dataset) // total_batch_size, desc="Training...", leave=False) as progress_bar_train:
+            for batch in train_loader(input_rng, train_dataset, total_batch_size):
+                state, train_metrics, dropout_rngs = parallel_train_step(state, batch, dropout_rngs)
+                progress_bar_train.update(1)
+
+        # Evaluate
+        #with tqdm(total=len(eval_dataset) // total_batch_size, desc="Evaluating...", leave=False) as progress_bar_eval:
+        #    for batch in glue_eval_data_loader(eval_dataset, total_batch_size):
+        #        labels = batch.pop("labels")
+        #        predictions = parallel_eval_step(state, batch)
+        #        metric.add_batch(predictions=chain(*predictions), references=chain(*labels))
+        #        progress_bar_eval.update(1)
+
+    	#eval_metric = metric.compute()
+
+    	#loss = round(flax.jax_utils.unreplicate(train_metrics)['loss'].item(), 3)
+    	#eval_score = round(list(eval_metric.values())[0], 3)
+    	#metric_name = list(eval_metric.keys())[0]
+
+    	#print(f"{i+1}/{num_train_epochs} | Train loss: {loss} | Eval {metric_name}: {eval_score}")      
+
+
+
     import sys
     sys.exit(1)
 
@@ -322,6 +420,9 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
     n_batch = len(train_dataloader)
+
+
+
     print("--- Training start ---")
     model.train()
 
@@ -342,21 +443,9 @@ def main():
             optimizer.zero_grad()
             progress_bar.update(1)
             completed_steps += 1
-
-            # if step >= args.max_train_steps:
-            #     break
-
-        # metric = evaluate.load("accuracy")
-        # model.eval()
-        # for step, batch in enumerate(eval_dataloader):
-        #     with torch.no_grad():
-        #         outputs = model(**batch, n_samples=config.num_test_sample)
-        #     logits = outputs.logits
-        #     predictions = torch.argmax(logits, dim=-1)
-        #     metric.add_batch(predictions=predictions, references=batch["labels"])
-        # res = metric.compute()
-        # print('result:', res)
     print("--- Training end ---")
+
+
 
     print('--- Test StoBERT and compute uncertainty measures ---')
     # Evaluate the modelgradient_accumulation_steps
