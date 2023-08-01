@@ -698,9 +698,8 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
 	#Hande: POINT1
 
         #TODO: Check
-        params_rng, dropout_rng, low_rank_rng, categorical_rng = jax.random.split(rng, 4)
-        rngs = {"params": params_rng, "dropout": dropout_rng, 
-                "low-rank": low_rank_rng, "categorical": categorical_rng}
+        params_rng, dropout_rng, low_rank_rng = jax.random.split(rng, 3)
+        rngs = {"params": params_rng, "dropout": dropout_rng, "low-rank": low_rank_rng}
 
         #TODO: If implementing cross attention, open here:
         if self.config.add_cross_attention:
