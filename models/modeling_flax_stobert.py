@@ -90,11 +90,6 @@ class FlaxStoSequenceClassifierOutput(ModelOutput):
     logits: jnp.ndarray = None
     hidden_states: Optional[Tuple[jnp.ndarray]] = None
     attentions: Optional[Tuple[jnp.ndarray]] = None
-    #Hande: Additional:
-    loss: Optional[jnp.ndarray] = None
-    kl: Optional[jnp.ndarray] = None
-    entropy: Optional[jnp.ndarray] = None
-    eloglike: Optional[jnp.ndarray] = None    
 
 
 @flax.struct.dataclass
@@ -721,7 +716,7 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
             #until here
         else:
             module_init_outputs = self.module.init(
-                rngs, input_ids, attention_mask, token_type_ids, position_ids, head_mask, return_dict=False
+                rngs, input_ids, attention_mask, token_type_ids, position_ids, head_mask
             )
 
         random_params = module_init_outputs["params"]
@@ -848,7 +843,6 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
                 token_type_ids=jnp.array(token_type_ids, dtype="i4"),
                 position_ids=jnp.array(position_ids, dtype="i4"),
                 head_mask=jnp.array(head_mask, dtype="i4"),
-		#TODO add gold labels here?
                 deterministic=not train,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
@@ -1093,7 +1087,6 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         token_type_ids,
         position_ids,
         head_mask,
-	labels: jnp.array, #TODO: Make sure this is in the **batch argument to the model call
         deterministic: bool = True,
         output_attentions: bool = False,
         output_hidden_states: bool = False,

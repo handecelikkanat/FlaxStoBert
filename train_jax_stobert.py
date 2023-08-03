@@ -32,8 +32,14 @@ from scipy.stats import entropy
 import torch.distributions as D
 import evaluate
 
+import jax
+import flax
+import optax
+
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from flax.training import train_state
+
+from typing import Callable
 
 #from models.modeling_bert import BertForSequenceClassification
 from models.modeling_flax_stobert import (
@@ -225,6 +231,17 @@ def evaluate_stochastic(model, dataloader, num_samples, top_n=1):
 
 
 
+#def loss_function(logits, labels):
+#    if is_regression:
+#        return jnp.mean((logits[..., 0] - labels) ** 2)
+#
+#    xentropy = optax.softmax_cross_entropy(logits, onehot(labels, num_classes=num_labels))
+#    return jnp.mean(xentropy)
+
+def eval_function(logits):
+    return logits[..., 0] if is_regression else logits.argmax(-1)
+
+
 class TrainState(train_state.TrainState):
     logits_function: Callable = flax.struct.field(pytree_node=False)
     loss_function: Callable = flax.struct.field(pytree_node=False)
@@ -301,7 +318,7 @@ def main():
     #    set_seed(args.seed)
 
     # RNG
-    rng = jax.random.PRNGKey(seed)
+    rng = jax.random.PRNGKey(args.seed)
     dropout_rngs = jax.random.split(rng, jax.local_device_count())
 
     # Tokenizer
@@ -328,12 +345,27 @@ def main():
 
 
 
-    #calculate number of training steps
+    #set up training parameters
+    total_batch_size = args.train_batch_size * jax.local_device_count()
+    print("The overall batch size (both for training and eval) is", total_batch_size)
+
+    num_train_steps = len(train_dataset) // total_batch_size * arg.num_train_epochs
+
+    learning_rate_function = optax.linear_schedule(init_value=args.learning_rate, end_value=0, transition_steps=num_train_steps)
 
     #create the parallel_train_step function
     parallel_train_step = jax.pmap(train_step, axis_name="batch", donate_argnums=(0,))
 
     #TRAINING LOOP:
+    state = TrainState.create(
+        apply_fn=model.__call__,
+        params=model.params,
+        tx=gradient_transformation,
+        logits_function=eval_function,
+        loss_function=loss_function,
+    )
+
+
     for i, epoch in enumerate(tqdm(range(1, num_train_epochs + 1), desc=f"Epoch ...", position=0, leave=True)):
 
         rng, data_rng = jax.random.split(rng)
