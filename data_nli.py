@@ -47,42 +47,16 @@ class NLIDataset(torch.utils.data.Dataset):
         self.labels = labels
 
     def __getitem__(self, idx):
-        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-        item["labels"] = torch.tensor(self.labels[idx])
+        item = {key: jnp.array(val[idx]) for key, val in self.encodings.items()}
+        item["labels"] = jnp.array(self.labels[idx])
         return item
 
     def __len__(self):
-        # return len(self.labels)
         return len(self.encodings.input_ids)
 
 
-#def collate_fn(batch):
-#    return batch
-#    new_batch = []
-#    for i in range(len(batch)):
-#        new_batch.append({'input_ids': batch[i]['input_ids'].to(device), 
-#                          'token_type_ids': batch[i]['token_type_ids'].to(device),
-#                          'attention_mask': batch[i]['attention_mask'].to(device)})
-#    return new_batch
 
-def preprocess_with(tokenizer):
-    def preprocess(input_):
-        return tokenizer(
-            input_["text"],
-            truncation=True,
-            padding="max_length",
-            max_length=50
-        )
-    
-    return preprocess
-
-
-
-
-
-
-
-def get_nli_dataset(config, tokenizer, data_path):
+def get_nli_datasets(config, tokenizer, data_path):
 
     logging.info(f"Experiment dataset: {config.dataset}")
     
@@ -126,58 +100,32 @@ def get_nli_dataset(config, tokenizer, data_path):
     dev_dataset = NLIDataset(dev_encodings, dev_labels)
     test_dataset = NLIDataset(test_encodings, test_labels)
 
-    train_loader = DataLoader(train_dataset, batch_size=config.train_batch_size, shuffle=True, 
-                                num_workers=8, pin_memory=True)
-    dev_loader = DataLoader(dev_dataset, batch_size=config.eval_batch_size, shuffle=False,
-                                num_workers=8, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=config.eval_batch_size, shuffle=False,
-                                num_workers=8, pin_memory=True)
-    
-    # We only use a subset of the data here for demonstration purposes
-    #train_split = datasets.load_dataset("multi_nli", split='train')
-    #test_split = datasets.load_dataset("multi_nli", split='validation_matched')
-    #ood_test_split = datasets.load_dataset("multi_nli", split='validation_matched')
-    #tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-
-    #train_split = train_split.rename_column("label", "labels")
-    #train_split = train_split.rename_column("premise", "text")
-    #train_split = train_split.map(preprocess_with(tokenizer), batched=True)
-    #train_split.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
-
-    #test_split = test_split.rename_column("label", "labels")
-    #test_split = test_split.rename_column("premise", "text")
-    #test_split = test_split.map(preprocess_with(tokenizer), batched=True)
-    #test_split.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
-
-    #ood_test_split = ood_test_split.rename_column("label", "labels")
-    #ood_test_split = ood_test_split.rename_column("premise", "text")
-    #ood_test_split = ood_test_split.map(preprocess_with(tokenizer), batched=True)
-    #ood_test_split.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
-
-    #BATCH_SIZE = 32
-    #train_loader = DataLoader(train_split, batch_size=BATCH_SIZE)
-    #test_loader = DataLoader(test_split, batch_size=BATCH_SIZE)
-    #ood_test_loader = DataLoader(ood_test_split, batch_size=BATCH_SIZE)
-
-    #print('train_loader len:', len(train_loader))
-    #print('test_loader len:', len(test_loader))
-    #print('ood_test_loader len:', len(ood_test_loader))
+    return train_dataset, dev_dataset, test_dataset
 
 
-    if 'LSTM' in config.model: 
-        unk_token = "<unk>"
-        unk_index = 0
-        glove_vectors = GloVe(name='42B', dim=300)
-        glove_vocab = vocab(glove_vectors.stoi)
-        glove_vocab.insert_token("<unk>",unk_index)
-        glove_vocab.set_default_index(unk_index)
 
-        glove_embeddings = glove_vectors.vectors
-        glove_embeddings = torch.cat((torch.zeros(1, glove_embeddings.shape[1]), glove_embeddings))
+#Jax dataloader:
+def train_data_loader(rng, dataset, batch_size):
+    steps_per_epoch = len(dataset) // batch_size
+    perms = jax.random.permutation(rng, len(dataset))
+    perms = perms[: steps_per_epoch * batch_size]  # Skip incomplete batch.
+    perms = perms.reshape((steps_per_epoch, batch_size))
 
-    else:
-        glove_embeddings = []
+    for perm in perms:
+        batch = dataset[perm]
+        batch = {k: jnp.array(v) for k, v in batch.items()}
+        batch = shard(batch)
 
-    return train_loader, dev_loader, test_loader, glove_embeddings
+        yield batch
+
+
+def eval_data_loader(dataset, batch_size):
+    for i in range(len(dataset) // batch_size):
+        batch = dataset[i * batch_size : (i + 1) * batch_size]
+        batch = {k: jnp.array(v) for k, v in batch.items()}
+        batch = shard(batch)
+
+        yield batch
+
 
 

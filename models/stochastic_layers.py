@@ -37,6 +37,7 @@ def normal_inv_softplus_init(mean, stddev, dtype = jnp.float_):
 
 def draw_samples(indices, mean, std, rng, dtype):
     mean = mean[indices]
+    print("shape of mean(indices):", jnp.shape(mean))
     std = std[indices]
     noise = jax.random.normal(rng, jnp.shape(mean), dtype)
     return mean + std*noise
@@ -111,11 +112,28 @@ class Dense(nn.Module):
         posterior_std_out = nn.softplus(posterior_std_out)
         rng_in = self.make_rng(self.rng_collection)
         rng_out = self.make_rng(self.rng_collection)
+        
+        print("shape inputs in stochastic: ", inputs.shape)
+        print("shape of extended inputs: ", lax.expand_dims(inputs, (inputs.ndim - 1,)).shape)
+        
+        print("shape of indices: ", indices.shape)
+        
         in_samples = draw_samples(indices, posterior_mean_in, posterior_std_in, rng_in, self.dtype) # [batch_size, rank, input_size]
         out_samples = draw_samples(indices, posterior_mean_out, posterior_std_out, rng_out, self.dtype) # [batch_size, rank, features]
         
-        inputs = lax.mul(lax.expand_dims(inputs, (inputs.ndim - 1,)), in_samples) # [batch_size, rank, input_size]
 
+        print("shape of in_samples in stochastic: ", in_samples.shape)
+       
+        
+        #Hande: 
+        temp =  lax.expand_dims(inputs, (inputs.ndim - 1,))
+        print("shape of temp: ", temp.shape)
+        inputs = lax.mul(temp, in_samples) # [batch_size, rank, input_size]
+        #inputs = lax.mul(inputs, in_samples) # [batch_size, rank, input_size]
+
+        #import sys
+        #sys.exit(1)
+        
         y = lax.dot_general(inputs, kernel,
                             (((inputs.ndim - 1,), (0,)), ((), ())),
                             precision=self.precision)
@@ -131,7 +149,7 @@ if __name__ == '__main__':
     key = jax.random.PRNGKey(44)
     key1, key2, key3, key4 = jax.random.split(key, 4)
     inputs = jax.random.uniform(key4, (8, 5))
-    indices = jnp.array([0, 1, 2, 3, 0, 1, 2, 3], dtype=jnp.int32)
+    indices = jnp.array([0, 1, 2, 3, 0, 1, 2, 3], dtype=jnp.int32) #indices = [1, batch_size]
     init_variables = layer.init({'params': key2, 'low-rank': key3}, inputs, indices)
     print(init_variables)
     outputs = layer.apply(init_variables, inputs, indices, rngs={'low-rank': key3})

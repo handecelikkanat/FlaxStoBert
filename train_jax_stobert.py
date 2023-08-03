@@ -32,6 +32,9 @@ from scipy.stats import entropy
 import torch.distributions as D
 import evaluate
 
+from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
+from flax.training import train_state
+
 #from models.modeling_bert import BertForSequenceClassification
 from models.modeling_flax_stobert import (
         FlaxStoBertForSequenceClassification, 
@@ -39,7 +42,7 @@ from models.modeling_flax_stobert import (
 )
 #from models_nli.modeling_outputs import StoSequenceClassifierOutput
 from models.config import StoBertConfig
-from data_nli import get_nli_dataset
+from data_nli import get_nli_datasets
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +225,9 @@ def evaluate_stochastic(model, dataloader, num_samples, top_n=1):
 
 
 
+class TrainState(train_state.TrainState):
+    logits_function: Callable = flax.struct.field(pytree_node=False)
+    loss_function: Callable = flax.struct.field(pytree_node=False)
 
 
 def train_step(state, batch, train_step_rng):
@@ -230,11 +236,11 @@ def train_step(state, batch, train_step_rng):
 
     def loss_function(params):
 
-	# TODO: out apply function returns FlaxStoSequenceClassifierOutput
+    # TODO: out apply function returns FlaxStoSequenceClassifierOutput
         output = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-	logits = output.logits
+        logits = output.logits
 
-	loss = state.loss_function(logits, targets)
+        loss = state.loss_function(logits, targets)
 
         #for calculating the kl loss and entropy, now we use categorical_rng
 
@@ -311,6 +317,15 @@ def main():
    
     #prep data
     #prepare the train_loader, test_loader, eval_loader    
+    # Data loaders
+    config.dataset = args.dataset
+    train_dataset, dev_dataset, test_dataset = get_nli_datasets(config, tokenizer, args.data_path)
+
+
+    print('train_dataset:', len(train_dataset))
+    print('dev_dataset:', len(dev_dataset))
+    print('test_dataset:', len(test_dataset))
+
 
 
     #calculate number of training steps
@@ -321,29 +336,30 @@ def main():
     #TRAINING LOOP:
     for i, epoch in enumerate(tqdm(range(1, num_train_epochs + 1), desc=f"Epoch ...", position=0, leave=True)):
 
-    	rng, input_rng = jax.random.split(rng)
-
-    	# Train
-    	with tqdm(total=len(train_dataset) // total_batch_size, desc="Training...", leave=False) as progress_bar_train:
-            for batch in train_loader(input_rng, train_dataset, total_batch_size):
+        rng, data_rng = jax.random.split(rng)
+    
+    
+        # Train
+        with tqdm(total=len(train_dataset) // total_batch_size, desc="Training...", leave=False) as progress_bar_train:
+            for batch in train_data_loader(data_rng, train_dataset, total_batch_size):
                 state, train_metrics, dropout_rngs = parallel_train_step(state, batch, dropout_rngs)
                 progress_bar_train.update(1)
 
         # Evaluate
         #with tqdm(total=len(eval_dataset) // total_batch_size, desc="Evaluating...", leave=False) as progress_bar_eval:
-        #    for batch in glue_eval_data_loader(eval_dataset, total_batch_size):
+        #    for batch in eval_data_loader(dev_dataset, total_batch_size):
         #        labels = batch.pop("labels")
         #        predictions = parallel_eval_step(state, batch)
         #        metric.add_batch(predictions=chain(*predictions), references=chain(*labels))
         #        progress_bar_eval.update(1)
 
-    	#eval_metric = metric.compute()
+        #eval_metric = metric.compute()
 
-    	#loss = round(flax.jax_utils.unreplicate(train_metrics)['loss'].item(), 3)
-    	#eval_score = round(list(eval_metric.values())[0], 3)
-    	#metric_name = list(eval_metric.keys())[0]
+        #loss = round(flax.jax_utils.unreplicate(train_metrics)['loss'].item(), 3)
+        #eval_score = round(list(eval_metric.values())[0], 3)
+        #metric_name = list(eval_metric.keys())[0]
 
-    	#print(f"{i+1}/{num_train_epochs} | Train loss: {loss} | Eval {metric_name}: {eval_score}")      
+        #print(f"{i+1}/{num_train_epochs} | Train loss: {loss} | Eval {metric_name}: {eval_score}")      
 
 
 
@@ -351,13 +367,6 @@ def main():
     sys.exit(1)
 
     
-    # Data loaders
-    config.dataset = args.dataset
-    train_dataloader, dev_dataloader, test_dataloader = get_nli_dataset(config, tokenizer, args.data_path)
-    print('train_dataloader:', len(train_dataloader))
-    print('dev_dataloader:', len(dev_dataloader))
-    print('test_dataloader:', len(test_dataloader))
-
 # Optimizer: separate deterministic & stochastic params
     det_params = config.det_params
     sto_params = config.sto_params
