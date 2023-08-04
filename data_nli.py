@@ -5,9 +5,14 @@ import logging
 import json
 import pandas as pd
 import torch
-from torchtext.vocab import GloVe, vocab
-from torch.utils.data import DataLoader
+import jax
+
+import jax.numpy as jnp
+from flax.training.common_utils import shard, shard_prng_key
+
 from transformers import BertTokenizer
+
+
 
 def _get_data(file_path: str):
     #HANDE: We dont have soft labels in dev anymore.
@@ -41,14 +46,15 @@ def _get_data(file_path: str):
         )
 
 
+#TODO: use something else than torch Dataset
 class NLIDataset(torch.utils.data.Dataset):
     def __init__(self, encodings, labels):
         self.encodings = encodings
         self.labels = labels
 
     def __getitem__(self, idx):
-        item = {key: jnp.array(val[idx]) for key, val in self.encodings.items()}
-        item["labels"] = jnp.array(self.labels[idx])
+        item = {key: jnp.array(val)[idx] for key, val in self.encodings.items()}
+        item["labels"] = jnp.array(self.labels)[idx]
         return item
 
     def __len__(self):
