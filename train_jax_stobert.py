@@ -36,7 +36,10 @@ import jax
 import flax
 import optax
 
-from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
+import jax.numpy as jnp
+
+from flax import traverse_util
+from flax.training.common_utils import get_metrics, onehot
 from flax.training import train_state
 
 from typing import Callable
@@ -48,7 +51,7 @@ from models.modeling_flax_stobert import (
 )
 #from models_nli.modeling_outputs import StoSequenceClassifierOutput
 from models.config import StoBertConfig
-from data_nli import get_nli_datasets
+from data_nli import get_nli_datasets, train_data_loader, eval_data_loader
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,8 @@ def parse_args():
             "mnli-m-small", # half of the mnli-m dataset
             "mnli-m-chaosnli",
             "mnli-m-small-chaosnli",  # half of the mnli-m dataset
+            "mnli-m-tiny-chaosnli",  # 96 train examples
+            "mnli-m-16-chaosnli",  # 16 train examples
             "snli",
             "mnli-snli",
             "snli-mnli-m",
@@ -230,68 +235,56 @@ def evaluate_stochastic(model, dataloader, num_samples, top_n=1):
     return result
 
 
-
-#def loss_function(logits, labels):
-#    if is_regression:
-#        return jnp.mean((logits[..., 0] - labels) ** 2)
-#
-#    xentropy = optax.softmax_cross_entropy(logits, onehot(labels, num_classes=num_labels))
-#    return jnp.mean(xentropy)
-
-def eval_function(logits):
-    return logits[..., 0] if is_regression else logits.argmax(-1)
-
-
 class TrainState(train_state.TrainState):
     logits_function: Callable = flax.struct.field(pytree_node=False)
     loss_function: Callable = flax.struct.field(pytree_node=False)
 
 
-def train_step(state, batch, train_step_rng):
+def decay_mask_fn(params):
+    flat_params = traverse_util.flatten_dict(params)
+    flat_mask = {path: (path[-1] != "bias" and path[-2:] != ("LayerNorm", "scale")) for path in flat_params}
+    return traverse_util.unflatten_dict(flat_mask)
+
+
+def adamw(weight_decay, learning_rate_function):
+    return optax.adamw(learning_rate=learning_rate_function, b1=0.9, b2=0.999, eps=1e-6, weight_decay=weight_decay, mask=decay_mask_fn)
+
+
+def loss_function(logits, labels, num_labels, categorical_rng):
+    xentropy = optax.softmax_cross_entropy(logits, onehot(labels, num_classes=num_labels))
+
+    #also calculate kl and entropy for the loss
+    # Stochastic Bert:  compute NLL, KL and entropy losses
+    #loss = None
+    #kl = None
+    #entropy = None
+    #if labels is not None:
+    #    if n_samples > 1:
+    #        labels = torch.repeat_interleave(labels, n_samples, dim=0)
+    #    loss = D.Categorical(logits=logits).log_prob(labels).mean()
+    #    kl, entropy = self.kl_and_entropy(self.config.kl_type, self.config.entropy_type)
+
+    return jnp.mean(xentropy)
+
+
+def eval_function(logits):
+    return logits[..., 0] if is_regression else logits.argmax(-1)
+
+
+# Create the parallel_train_step function
+def train_step(state, batch, num_label, learning_rate_function, train_step_rng):
     targets = batch.pop("labels")
-    dropout_rng, categorical_rng, new_train_step_rng = jax.random.split(train_step_rng, 3)
 
-    def loss_function(params):
+    dropout_rng, low_rank_rng, categorical_rng, new_train_step_rng = jax.random.split(train_step_rng, 4)
 
+    def calculate_loss(params):
     # TODO: out apply function returns FlaxStoSequenceClassifierOutput
-        output = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+        output = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, low_rank_rng=low_rank_rng, train=True)
         logits = output.logits
-
-        loss = state.loss_function(logits, targets)
-
-        #for calculating the kl loss and entropy, now we use categorical_rng
-
-        #Hande: TODO: Calculate kl and entropy for loss
-        # TODO: Convert code from torch to jax/flax
-        # Stochastic Bert:  compute NLL, KL and entropy losses
-        loss = None
-        kl = None
-        entropy = None
-        if labels is not None:
-            if n_samples > 1:
-                labels = torch.repeat_interleave(labels, n_samples, dim=0)
-            loss = D.Categorical(logits=logits).log_prob(labels).mean()
-            kl, entropy = self.kl_and_entropy(self.config.kl_type, self.config.entropy_type)
-        if not return_dict:
-            output = (logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
-
-
-        if not return_dict:
-            return (logits,) + outputs[2:]
-
-        return FlaxStoSequenceClassifierOutput(
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-
-            #Hande: TODO: add kl and entropy loss
-        )
-
-
+        loss = state.loss_function(logits, targets, num_labels, categorical_rng)
         return loss
 
-    grad_function = jax.value_and_grad(loss_function)
+    grad_function = jax.value_and_grad(calculate_loss)
     loss, grad = grad_function(state.params)
     grad = jax.lax.pmean(grad, "batch")
     new_state = state.apply_gradients(grads=grad)
@@ -299,11 +292,9 @@ def train_step(state, batch, train_step_rng):
     return new_state, metrics, new_train_step_rng
 
 
-
 def main():
 
     args = parse_args()
-
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
@@ -319,62 +310,55 @@ def main():
 
     # RNG
     rng = jax.random.PRNGKey(args.seed)
-    dropout_rngs = jax.random.split(rng, jax.local_device_count())
+    train_step_rng, data_rng = jax.random.split(rng, 2)
+    train_step_rngs = jax.random.split(train_step_rng, jax.local_device_count())
 
     # Tokenizer
     config = StoBertConfig()
     tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path)
 
     # Model
-    #model = StoBertForSequenceClassification(config).from_pretrained(args.model_name_or_path, config=config, num_labels=3)
     config.num_labels = args.num_labels
     model = FlaxStoBertForSequenceClassification(config).from_pretrained(
-        args.model_name_or_path, config=config
+        args.model_name_or_path, config=config, seed=0
     )
    
-    #prep data
-    #prepare the train_loader, test_loader, eval_loader    
-    # Data loaders
+    # Datasets
     config.dataset = args.dataset
     train_dataset, dev_dataset, test_dataset = get_nli_datasets(config, tokenizer, args.data_path)
 
-
-    print('train_dataset:', len(train_dataset))
-    print('dev_dataset:', len(dev_dataset))
-    print('test_dataset:', len(test_dataset))
-
-
-
-    #set up training parameters
+    # Training parameters
     total_batch_size = args.train_batch_size * jax.local_device_count()
     print("The overall batch size (both for training and eval) is", total_batch_size)
 
-    num_train_steps = len(train_dataset) // total_batch_size * arg.num_train_epochs
+    num_train_steps = len(train_dataset) // total_batch_size * args.num_train_epochs
 
     learning_rate_function = optax.linear_schedule(init_value=args.learning_rate, end_value=0, transition_steps=num_train_steps)
 
-    #create the parallel_train_step function
+    # Paralellize train function
     parallel_train_step = jax.pmap(train_step, axis_name="batch", donate_argnums=(0,))
 
-    #TRAINING LOOP:
+    # Training Loop
     state = TrainState.create(
         apply_fn=model.__call__,
         params=model.params,
-        tx=gradient_transformation,
+        tx=adamw(weight_decay=0.01, learning_rate_function=learning_rate_function),
         logits_function=eval_function,
         loss_function=loss_function,
     )
 
+    state = flax.jax_utils.replicate(state)
+    num_labels = flax.jax_utils.replicate(args.num_labels)
 
-    for i, epoch in enumerate(tqdm(range(1, num_train_epochs + 1), desc=f"Epoch ...", position=0, leave=True)):
+    myindex = 1
+    for i, epoch in enumerate(tqdm(range(1, args.num_train_epochs + 1), desc=f"Epoch ...", position=0, leave=True)):
 
-        rng, data_rng = jax.random.split(rng)
-    
-    
+        data_rng, data_rng_to_be_used = jax.random.split(data_rng)
+
         # Train
         with tqdm(total=len(train_dataset) // total_batch_size, desc="Training...", leave=False) as progress_bar_train:
-            for batch in train_data_loader(data_rng, train_dataset, total_batch_size):
-                state, train_metrics, dropout_rngs = parallel_train_step(state, batch, dropout_rngs)
+            for batch in train_data_loader(data_rng_to_be_used, train_dataset, total_batch_size):
+                state, train_metrics, train_step_rngs = parallel_train_step(state, batch, num_labels, train_step_rngs)
                 progress_bar_train.update(1)
 
         # Evaluate
@@ -394,11 +378,10 @@ def main():
         #print(f"{i+1}/{num_train_epochs} | Train loss: {loss} | Eval {metric_name}: {eval_score}")      
 
 
-
     import sys
     sys.exit(1)
 
-    
+'''    
 # Optimizer: separate deterministic & stochastic params
     det_params = config.det_params
     sto_params = config.sto_params
@@ -422,48 +405,6 @@ def main():
              **sto_params
          },
     ]
-    # optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
-    optimizer = torch.optim.Adam(optimizer_grouped_parameters, lr=args.learning_rate)
-
-    # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, test_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader, test_dataloader
-    )
-
-    # Scheduler and math around the number of training steps.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-    if args.max_train_steps is None:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    else:
-        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
-    lr_scheduler = get_scheduler(
-        name=args.lr_scheduler_type,
-        optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
-        num_training_steps=args.max_train_steps,
-    )
-
-    # Count parameters to train
-    count_parameters(model, logger)
-
-    # Train!
-    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-
-    logger.info("***** Running training *****")
-    logger.info(f"  Num batches = {len(train_dataloader)}")
-    logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
-    completed_steps = 0
-    n_batch = len(train_dataloader)
-
-
-
     print("--- Training start ---")
     model.train()
 
@@ -498,6 +439,7 @@ def main():
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
+'''
 
 
 if __name__ == "__main__":
