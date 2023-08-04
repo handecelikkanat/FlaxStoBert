@@ -1,17 +1,15 @@
 import argparse
-import argparse
 import logging
 import math
 import os
+import sys
 import random
-
 
 from pathlib import Path
 import datasets
 import torch
 from tqdm.auto import tqdm
 import numpy as np
-import sys
 import time
 
 from transformers import (
@@ -171,6 +169,14 @@ def parse_args():
         default=10,
         help="logging frequency during training.",
     )
+    parser.add_argument(
+        "--gpu_devices",
+        type=int,
+        default=None,
+        nargs='*',
+        help="gpu devices to be used. ex: 0, 1",
+    )
+
 
     args = parser.parse_args()
 
@@ -307,6 +313,14 @@ def main():
     # If passed along, set the training seed now.
     #if args.seed is not None:
     #    set_seed(args.seed)
+
+    # Initialize JAX
+    print(args.gpu_devices)
+    jax.distributed.initialize(local_device_ids=args.gpu_devices)  # On GPU, see above for the necessary arguments.
+    print('jax device count:', jax.device_count())  # total number of accelerator devices in the cluster
+    print('jax local device count: ', jax.local_device_count())  # number of accelerator devices attached to this host
+
+    sys.exit(1)
 
     # RNG
     rng = jax.random.PRNGKey(args.seed)
