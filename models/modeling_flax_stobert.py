@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Union
 
 import flax
 import flax.linen as nn
@@ -56,7 +56,10 @@ from transformers.models.bert.modeling_flax_bert import (
 from transformers.utils import ModelOutput, add_start_docstrings, add_start_docstrings_to_model_forward, logging
 
 from .config import StoBertConfig
-from .stochastic_layers import Dense as StoDense
+from .stochastic_layers import Dense as StoDense, normal_init, normal_inv_softplus_init
+
+KeyArray = Any
+KeyArray = Union[jax.Array, jax.random.KeyArray]
 
 logger = logging.get_logger(__name__)
 
@@ -120,13 +123,6 @@ class FlaxStoBertForPreTrainingOutput(ModelOutput):
     seq_relationship_logits: jnp.ndarray = None
     hidden_states: Optional[Tuple[jnp.ndarray]] = None
     attentions: Optional[Tuple[jnp.ndarray]] = None
-    #Hande: Additional:
-    loss: Optional[jnp.ndarray] = None
-    kl: Optional[jnp.ndarray] = None
-    entropy: Optional[jnp.ndarray] = None
-    eloglike: Optional[jnp.ndarray] = None
-
-
 
 
 class FlaxStoBertEmbeddings(nn.Module):
@@ -185,22 +181,27 @@ class FlaxStoBertSelfAttention(nn.Module):
                 "                   : {self.config.num_attention_heads}"
             )
 
-        self.query = StoDense(
-            self.config.hidden_size,
-            dtype=self.dtype,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-        )
-        self.key = StoDense(
-            self.config.hidden_size,
-            dtype=self.dtype,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-        )
-        self.value = StoDense(
-            self.config.hidden_size,
-            dtype=self.dtype,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-        )
-
+        self.query = StoDense(features=self.config.hidden_size, 
+                              rank=self.config.rank, 
+                              num_components=self.config.n_components, 
+                              posterior_mean_init=normal_init(self.config.posterior_mean_init[0],
+                                                              self.config.posterior_mean_init[1]),
+                              posterior_std_init=normal_inv_softplus_init(self.config.posterior_std_init[0],
+                                                                          self.config.posterior_std_init[1]))  
+        self.key = StoDense(features=self.config.hidden_size, 
+                              rank=self.config.rank, 
+                              num_components=self.config.n_components, 
+                              posterior_mean_init=normal_init(self.config.posterior_mean_init[0],
+                                                              self.config.posterior_mean_init[1]),
+                              posterior_std_init=normal_inv_softplus_init(self.config.posterior_std_init[0],
+                                                                          self.config.posterior_std_init[1]))  
+        self.value = StoDense(features=self.config.hidden_size, 
+                              rank=self.config.rank, 
+                              num_components=self.config.n_components, 
+                              posterior_mean_init=normal_init(self.config.posterior_mean_init[0],
+                                                              self.config.posterior_mean_init[1]),
+                              posterior_std_init=normal_inv_softplus_init(self.config.posterior_std_init[0],
+                                                                          self.config.posterior_std_init[1]))  
         if self.causal:
             self.causal_mask = make_causal_mask(
                 jnp.ones((1, self.config.max_position_embeddings), dtype="bool"), dtype="bool"
@@ -255,23 +256,26 @@ class FlaxStoBertSelfAttention(nn.Module):
         deterministic=True,
         output_attentions: bool = False,
         indices: jnp.array = None,
+        rng: Optional[KeyArray] = None, 
     ):
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
         is_cross_attention = key_value_states is not None
         batch_size = hidden_states.shape[0]
 
+        query_rng, key_rng, value_rng = jax.random.split(rng, 3)
+        
         # get query proj
-        query_states = self.query(hidden_states, indices)
+        query_states = self.query(hidden_states, indices, rng={'low-rank': query_rng})
         # get key, value proj
         if is_cross_attention:
             # cross_attentions
-            key_states = self.key(key_value_states, indices)
-            value_states = self.value(key_value_states, indices)
+            key_states = self.key(key_value_states, indices, rng={'low-rank': key_rng})
+            value_states = self.value(key_value_states, indices, rng={'low-rank': value_rng})
         else:
             # self_attention
-            key_states = self.key(hidden_states, indices)
-            value_states = self.value(hidden_states, indices)
+            key_states = self.key(hidden_states, indices, rng={'low-rank': key_rng})
+            value_states = self.value(hidden_states, indices, rng={'low-rank': value_rng})
 
         query_states = self._split_heads(query_states)
         key_states = self._split_heads(key_states)
@@ -349,11 +353,13 @@ class FlaxStoBertSelfOutput(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = StoDense(
-            self.config.hidden_size,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-            dtype=self.dtype,
-        )
+        self.dense = StoDense(features=self.config.hidden_size,
+                              rank=self.config.rank,
+                              num_components=self.config.n_components,
+                              posterior_mean_init=normal_init(self.config.posterior_mean_init[0],
+                                                              self.config.posterior_mean_init[1]),
+                              posterior_std_init=normal_inv_softplus_init(self.config.posterior_std_init[0],
+                                                                          self.config.posterior_std_init[1]))          
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
         self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
 
@@ -383,6 +389,7 @@ class FlaxStoBertAttention(nn.Module):
         deterministic: bool=True,
         output_attentions: bool = False,
         indices: jnp.array = None,
+        rng: Optional[KeyArray] = None,
     ):
         # Attention mask comes in as attention_mask.shape == (*batch_sizes, kv_length)
         # FLAX expects: attention_mask.shape == (*batch_sizes, 1, 1, kv_length) such that it is broadcastable
@@ -396,6 +403,7 @@ class FlaxStoBertAttention(nn.Module):
             deterministic=deterministic,
             output_attentions=output_attentions,
             indices=indices,
+            rng=rng,
         )
         attn_output = attn_outputs[0]
         hidden_states = self.output(attn_output, hidden_states, deterministic=deterministic, indices=indices)
@@ -413,11 +421,13 @@ class FlaxStoBertIntermediate(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = StoDense(
-            self.config.intermediate_size,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-            dtype=self.dtype,
-        )
+        self.dense = StoDense(features=self.config.intermediate_size,
+                              rank=self.config.rank,
+                              num_components=self.config.n_components,
+                              posterior_mean_init=normal_init(self.config.posterior_mean_init[0],
+                                                              self.config.posterior_mean_init[1]),
+                              posterior_std_init=normal_inv_softplus_init(self.config.posterior_std_init[0],
+                                                                          self.config.posterior_std_init[1]))                                
         self.activation = ACT2FN[self.config.hidden_act]
 
     def __call__(self, hidden_states, indices: jnp.array):
@@ -431,11 +441,13 @@ class FlaxStoBertOutput(nn.Module):
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
     def setup(self):
-        self.dense = StoDense(
-            self.config.hidden_size,
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
-            dtype=self.dtype,
-        )
+        self.dense = StoDense(features=self.config.hidden_size,
+                              rank=self.config.rank,
+                              num_components=self.config.n_components,
+                              posterior_mean_init=normal_init(self.config.posterior_mean_init[0], 
+                                                              self.config.posterior_mean_init[1]),
+                              posterior_std_init=normal_inv_softplus_init(self.config.posterior_std_init[0],
+                                                                          self.config.posterior_std_init[1]))
         self.dropout = nn.Dropout(rate=self.config.hidden_dropout_prob)
         self.LayerNorm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
 
@@ -468,6 +480,7 @@ class FlaxStoBertLayer(nn.Module):
         deterministic: bool = True,
         output_attentions: bool = False,
         indices: jnp.array = None,
+        rng: Optional[KeyArray] = None,
     ):
         # Self Attention
         attention_outputs = self.attention(
@@ -478,6 +491,7 @@ class FlaxStoBertLayer(nn.Module):
             deterministic=deterministic,
             output_attentions=output_attentions,
             indices=indices,
+            rng=rng,
         )
         attention_output = attention_outputs[0]
 
@@ -537,6 +551,7 @@ class FlaxStoBertLayerCollection(nn.Module):
         output_hidden_states: bool = False,
         return_dict: bool = True,
         indices: jnp.array = None,
+        rng: Optional[KeyArray] = None,
     ):
         all_attentions = () if output_attentions else None
         all_hidden_states = () if output_hidden_states else None
@@ -564,6 +579,7 @@ class FlaxStoBertLayerCollection(nn.Module):
                 deterministic,
                 output_attentions,
                 indices=indices,
+                rng=rng,
             )
 
             hidden_states = layer_outputs[0]
@@ -615,6 +631,7 @@ class FlaxStoBertEncoder(nn.Module):
         output_hidden_states: bool = False,
         return_dict: bool = True,
         indices: jnp.array = None,	
+        rng: Optional[KeyArray] = None,
     ):
         return self.layer(
             hidden_states,
@@ -628,22 +645,8 @@ class FlaxStoBertEncoder(nn.Module):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             indices=indices,
+            rng=rng,
         )
-
-
-
-class FlaxStoBertPreTrainingHeads(nn.Module):
-    config: StoBertConfig
-    dtype: jnp.dtype = jnp.float32
-
-    def setup(self):
-        self.predictions = FlaxStoBertLMPredictionHead(self.config, dtype=self.dtype)
-        self.seq_relationship = StoDense(2, dtype=self.dtype)
-
-    def __call__(self, hidden_states, pooled_output, shared_embedding=None):
-        prediction_scores = self.predictions(hidden_states, shared_embedding=shared_embedding)
-        seq_relationship_score = self.seq_relationship(pooled_output)
-        return prediction_scores, seq_relationship_score
 
 
 class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
@@ -681,7 +684,7 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
             gradient_checkpointing=True,
         )
 
-    def init_weights(self, rng: jax.random.PRNGKey, input_shape: Tuple, params: FrozenDict = None) -> FrozenDict:
+    def init_weights(self, rng: jax.random.KeyArray, input_shape: Tuple, params: FrozenDict = None) -> FrozenDict:
         # init input tensors
         input_ids = jnp.zeros(input_shape, dtype="i4")
         token_type_ids = jnp.zeros_like(input_ids)
@@ -689,10 +692,6 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         attention_mask = jnp.ones_like(input_ids)
         head_mask = jnp.ones((self.config.num_hidden_layers, self.config.num_attention_heads))
 
-
-	#Hande: POINT1
-
-        #TODO: Check
         params_rng, dropout_rng, low_rank_rng = jax.random.split(rng, 3)
         rngs = {"params": params_rng, "dropout": dropout_rng, "low-rank": low_rank_rng}
 
@@ -747,11 +746,12 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_ids.shape)
 
         init_variables = self.module.init(
-            jax.random.PRNGKey(0), input_ids, attention_mask, position_ids, return_dict=False, init_cache=True
+            jax.random.KeyArray(0), input_ids, attention_mask, position_ids, return_dict=False, init_cache=True
         )
         return unfreeze(init_variables["cache"])
 
     #@add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
+    #state.apply_fn calls this function:
     def __call__(
         self,
         input_ids,
@@ -762,7 +762,8 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         params: dict = None,
-        dropout_rng: jax.random.PRNGKey = None,
+        dropout_rng: jax.random.KeyArray = None,
+        low_rank_rng: jax.random.KeyArray = None,
         train: bool = False,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -788,10 +789,13 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
         if head_mask is None:
             head_mask = jnp.ones((self.config.num_hidden_layers, self.config.num_attention_heads))
 
+        print('low rank rng in model call: ', low_rank_rng)
+
         # Handle any PRNG if needed
         rngs = {}
         if dropout_rng is not None:
             rngs["dropout"] = dropout_rng
+        rngs['low-rank'] = low_rank_rng
 
         inputs = {"params": params or self.params}
 
@@ -820,7 +824,7 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
             #    output_attentions=output_attentions,
             #    output_hidden_states=output_hidden_states,
             #    return_dict=return_dict,
-            #    rngs=rngs,
+            #    rng=rng,
             #    mutable=mutable,
             #)
 
@@ -836,6 +840,7 @@ class FlaxStoBertPreTrainedModel(FlaxPreTrainedModel):
             pass
 
         else:
+
             outputs = self.module.apply(
                 inputs,
                 jnp.array(input_ids, dtype="i4"),
@@ -883,7 +888,7 @@ class FlaxStoBertModule(nn.Module):
         output_hidden_states: bool = False,
         return_dict: bool = True,
         indices: jnp.array = None,
-
+        rng: Optional[KeyArray] = None,
     ):
 
         # make sure `token_type_ids` is correctly initialized when not passed
@@ -895,20 +900,14 @@ class FlaxStoBertModule(nn.Module):
             position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_ids.shape)
 
         # Hande: From Elaine: change indices from 1D to 2D [batch_size, seq_length]
-        # TODO: Convert to jax/flax
         # indices = torch.unsqueeze(indices, dim=1).repeat(1, seq_length)
-        
-
         batch_size, seq_length = input_ids.shape
-        
-        #Hande: FIXME: Double-check. Trying to achieve the effect in the above numpy unsqueeze & repeat
         indices = jnp.expand_dims(indices, axis=1).repeat(seq_length, axis=1)
-
-        print("indices shape in FlaxStoBertModule is ", indices.shape)
 
         hidden_states = self.embeddings(
             input_ids, token_type_ids, position_ids, attention_mask, deterministic=deterministic
         )
+
         outputs = self.encoder(
             hidden_states,
             attention_mask,
@@ -921,6 +920,7 @@ class FlaxStoBertModule(nn.Module):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             indices=indices,
+            rng=rng,
         )
         hidden_states = outputs[0]
         pooled = self.pooler(hidden_states) if self.add_pooling_layer else None
@@ -947,7 +947,7 @@ class FlaxStoBertModule(nn.Module):
 class FlaxStoBertModel(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertModule
 
-
+'''
 class FlaxStoBertForPreTrainingModule(nn.Module):
     config: StoBertConfig
     dtype: jnp.dtype = jnp.float32
@@ -1009,7 +1009,7 @@ class FlaxStoBertForPreTrainingModule(nn.Module):
 
             #Hande: FIXME: Here add also kl and entropy loss information
         )
-
+'''
 
 
 #@add_start_docstrings(
@@ -1019,8 +1019,8 @@ class FlaxStoBertForPreTrainingModule(nn.Module):
 #    """,
 #    BERT_START_DOCSTRING,
 #)
-class FlaxStoBertForPreTraining(FlaxStoBertPreTrainedModel):
-    module_class = FlaxStoBertForPreTrainingModule
+#class FlaxStoBertForPreTraining(FlaxStoBertPreTrainedModel):
+#    module_class = FlaxStoBertForPreTrainingModule
 
 #FLAX_BERT_FOR_PRETRAINING_DOCSTRING = """
 #    Returns:
@@ -1091,7 +1091,6 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         output_attentions: bool = False,
         output_hidden_states: bool = False,
         return_dict: bool = True,
-        #TODO: Where is the rngs here that were sent into module.apply() function?
         indices: jnp.array = None, #ADDED
         n_samples: int = 1,        #ADDED    
     ):
@@ -1108,6 +1107,8 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
             #indices = torch.arange(input_ids.size(0), dtype=torch.long, device=input_ids.device) % self.config.n_components
             indices = jnp.zeros(input_ids.shape[0], dtype=jnp.int16) % self.config.n_components
 
+        rng = self.make_rng('low-rank')
+
         # Model
         outputs = self.bert(
             input_ids,
@@ -1120,6 +1121,7 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             indices=indices,
+            rng=rng,
         )
 
         pooled_output = outputs[1]
@@ -1133,10 +1135,8 @@ class FlaxStoBertForSequenceClassificationModule(nn.Module):
         )
 
 
-
 class FlaxStoBertForSequenceClassification(FlaxStoBertPreTrainedModel):
     module_class = FlaxStoBertForSequenceClassificationModule
-
 
 
 # TODO: other implementations pending: 
