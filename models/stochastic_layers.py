@@ -71,7 +71,7 @@ class Dense(nn.Module):
     posterior_std_init: Callable[[PRNGKey, Shape, Dtype], Array] = nn.initializers.zeros
 
     @nn.compact
-    def __call__(self, inputs: Array, indices: Array) -> Array:
+    def __call__(self, inputs: Array, indices: Array, rng: Optional[KeyArray] = None) -> Array:
         """Applies a linear transformation to the inputs along the last dimension.
 
         Args:
@@ -113,27 +113,14 @@ class Dense(nn.Module):
         rng_in = self.make_rng(self.rng_collection)
         rng_out = self.make_rng(self.rng_collection)
         
-        print("shape inputs in stochastic: ", inputs.shape)
-        print("shape of extended inputs: ", lax.expand_dims(inputs, (inputs.ndim - 1,)).shape)
-        
-        print("shape of indices: ", indices.shape)
         
         in_samples = draw_samples(indices, posterior_mean_in, posterior_std_in, rng_in, self.dtype) # [batch_size, rank, input_size]
         out_samples = draw_samples(indices, posterior_mean_out, posterior_std_out, rng_out, self.dtype) # [batch_size, rank, features]
         
 
-        print("shape of in_samples in stochastic: ", in_samples.shape)
-       
         
-        #Hande: 
-        temp =  lax.expand_dims(inputs, (inputs.ndim - 1,))
-        print("shape of temp: ", temp.shape)
-        inputs = lax.mul(temp, in_samples) # [batch_size, rank, input_size]
-        #inputs = lax.mul(inputs, in_samples) # [batch_size, rank, input_size]
+        inputs = lax.mul(lax.expand_dims(inputs, (inputs.ndim - 1,)), in_samples) # [batch_size, rank, input_size]
 
-        #import sys
-        #sys.exit(1)
-        
         y = lax.dot_general(inputs, kernel,
                             (((inputs.ndim - 1,), (0,)), ((), ())),
                             precision=self.precision)

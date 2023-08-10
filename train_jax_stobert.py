@@ -266,8 +266,10 @@ def loss_function(logits, labels, num_labels, categorical_rng):
     #entropy = None
     #if labels is not None:
     #    if n_samples > 1:
-    #        labels = torch.repeat_interleave(labels, n_samples, dim=0)
-    #    loss = D.Categorical(logits=logits).log_prob(labels).mean()
+    #        #labels = torch.repeat_interleave(labels, n_samples, dim=0)
+    #        labels = labels.repeat(n_samples)
+    #    #loss = D.Categorical(logits=logits).log_prob(labels).mean()
+    #    jax.random.categorical(categorical_rng, logits)
     #    kl, entropy = self.kl_and_entropy(self.config.kl_type, self.config.entropy_type)
 
     return jnp.mean(xentropy)
@@ -276,26 +278,6 @@ def loss_function(logits, labels, num_labels, categorical_rng):
 def eval_function(logits):
     return logits[..., 0] if is_regression else logits.argmax(-1)
 
-
-# Create the parallel_train_step function
-def train_step(state, batch, num_label, learning_rate_function, train_step_rng):
-    targets = batch.pop("labels")
-
-    dropout_rng, low_rank_rng, categorical_rng, new_train_step_rng = jax.random.split(train_step_rng, 4)
-
-    def calculate_loss(params):
-    # TODO: out apply function returns FlaxStoSequenceClassifierOutput
-        output = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, low_rank_rng=low_rank_rng, train=True)
-        logits = output.logits
-        loss = state.loss_function(logits, targets, num_labels, categorical_rng)
-        return loss
-
-    grad_function = jax.value_and_grad(calculate_loss)
-    loss, grad = grad_function(state.params)
-    grad = jax.lax.pmean(grad, "batch")
-    new_state = state.apply_gradients(grads=grad)
-    metrics = jax.lax.pmean({"loss": loss, "learning_rate": learning_rate_function(state.step)}, axis_name="batch")
-    return new_state, metrics, new_train_step_rng
 
 
 def main():
@@ -315,12 +297,10 @@ def main():
     #    set_seed(args.seed)
 
     # Initialize JAX
-    print(args.gpu_devices)
-    jax.distributed.initialize(local_device_ids=args.gpu_devices)  # On GPU, see above for the necessary arguments.
+    if args.gpu_devices:
+        jax.distributed.initialize(local_device_ids=args.gpu_devices)  # On GPU, see above for the necessary arguments.
     print('jax device count:', jax.device_count())  # total number of accelerator devices in the cluster
     print('jax local device count: ', jax.local_device_count())  # number of accelerator devices attached to this host
-
-    sys.exit(1)
 
     # RNG
     rng = jax.random.PRNGKey(args.seed)
@@ -349,6 +329,29 @@ def main():
 
     learning_rate_function = optax.linear_schedule(init_value=args.learning_rate, end_value=0, transition_steps=num_train_steps)
 
+    # Create the parallel_train_step function
+    def train_step(state, batch, num_label, train_step_rng):
+        targets = batch.pop("labels")
+
+        dropout_rng, low_rank_rng, categorical_rng, new_train_step_rng = jax.random.split(train_step_rng, 4)
+
+        def calculate_loss(params):
+        # TODO: out apply function returns FlaxStoSequenceClassifierOutput
+            output = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, low_rank_rng=low_rank_rng, train=True)
+            #TODO: KL LOSS: This output should also now include kl losses returned from every submodule. An array?
+            logits = output.logits
+            loss = state.loss_function(logits, targets, num_labels, categorical_rng)
+            return loss
+
+        grad_function = jax.value_and_grad(calculate_loss)
+        loss, grad = grad_function(state.params)
+        grad = jax.lax.pmean(grad, "batch")
+        new_state = state.apply_gradients(grads=grad)
+        metrics = jax.lax.pmean({"loss": loss, "learning_rate": learning_rate_function(state.step)}, axis_name="batch")
+
+        return new_state, metrics, new_train_step_rng
+
+
     # Paralellize train function
     parallel_train_step = jax.pmap(train_step, axis_name="batch", donate_argnums=(0,))
 
@@ -364,7 +367,6 @@ def main():
     state = flax.jax_utils.replicate(state)
     num_labels = flax.jax_utils.replicate(args.num_labels)
 
-    myindex = 1
     for i, epoch in enumerate(tqdm(range(1, args.num_train_epochs + 1), desc=f"Epoch ...", position=0, leave=True)):
 
         data_rng, data_rng_to_be_used = jax.random.split(data_rng)

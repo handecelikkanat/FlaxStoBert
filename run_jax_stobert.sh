@@ -1,28 +1,32 @@
 #!/bin/bash
-#SBATCH --job-name=train_stobert_nli_chaosnli
-#SBATCH --account=Project_2001194
-#SBATCH -o stobert_chaosnli_res.txt
+#SBATCH --job-name=flaxstobert_nli_chaosnli
+#SBATCH --account=Project_2007780
+#SBATCH -o logs/flaxstobert_%j.out
+#SBATCH -e logs/flaxstobert_%j.err
 #SBATCH --partition=gpu
-#SBATCH --time=48:00:00
+#SBATCH --time=00:15:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=8000
-#SBATCH --gres=gpu:v100:1
+#SBATCH --gres=gpu:v100:4
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=elaine.zosa@helsinki.fi
 
-source /home/hande/Work/bert_jax/venv/bin/activate
+BASE=/scratch/project_2007780/hande/
+CODEDIR=$BASE/node-BNNs/bert_jax
+DATADIR=$BASE/DATA/HND_NLI
 
-BASE=/home/hande/Work/
+source $CODEDIR/venv/bin/activate
 
-python -m pdb $BASE/bert_jax/train_jax_stobert.py \
-	--dataset mnli-m-chaosnli \
-	--data_path /home/hande/Work/DATA/HND_NLI/ \
+#-m pdb
+python $CODEDIR/train_jax_stobert.py \
+	--dataset mnli-m-tiny-chaosnli \
+	--data_path $DATADIR \
 	--model_name_or_path bert-base-uncased \
 	--train_batch_size 16 \
 	--eval_batch_size 16 \
 	--num_train_epochs 10 \
 	--learning_rate 2e-5 \
-	--output_dir $BASE/outputs/bert_jax \
-    --seed 1506
+	--output_dir $CODEDIR/outputs/bert_jax \
+    --seed 7567 \
+    --gpu_devices 0 1 \
 
